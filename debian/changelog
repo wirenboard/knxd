@@ -1,3 +1,9 @@
+knxd (0.14.74-1-wb100) unstable; urgency=medium
+
+  * Add restart wb-knxd-config after install
+
+ -- Mikhail Burchu <mikhail.burchu@wirenboard.com>  Wed, 22 Oct 2025 14:20:00 +0300
+
 knxd (0.14.74-1) unstable; urgency=medium
 
   * Merge.
