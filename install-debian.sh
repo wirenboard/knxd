@@ -21,7 +21,7 @@ if [ "$B" != "ci" ] && ! sudo apt-get autoremove --assume-no ; then
 fi
 
 : 1 install tools, minimal variant
-sudo apt-get install --no-install-recommends adduser build-essential devscripts equivs --yes
+sudo apt-get install --no-install-recommends build-essential devscripts equivs --yes
 
 : 2 auto-install packages required for building knxd
 sudo mk-build-deps --install --tool='apt-get --no-install-recommends --yes --allow-unauthenticated' debian/control

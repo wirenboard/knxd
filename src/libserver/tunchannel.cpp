@@ -19,6 +19,7 @@
 
 #include "tunchannel.h"
 #include "tcptunserver.h"
+#include "eibnetserver.h"
 
 TunChannel::TunChannel(const TcpTunConnPtr& connection, uint8_t channelID)
   : t(TracePtr(new Trace(*connection->t)))
@@ -371,6 +372,11 @@ ErrorCode TunServiceConfig::handleConfigRequest(EIBnet_ConfigRequest &r1)
                   res[0] = 0;
                   res[1] = 0;
                   start = 0;
+                }
+              else if (prop == PID_MAX_APDULENGTH)
+                {
+                  res.resize (2);
+                  res[1] = 0xF9;
                 }
               else
                 count = 0;

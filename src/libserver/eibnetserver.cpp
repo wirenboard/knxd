@@ -162,6 +162,7 @@ EIBnetServer::setup()
   interface = cfg->value("interface","");
   servername = cfg->value("name", dynamic_cast<Router *>(&router)->servername);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
+  maxAPDULength = cfg->value("max-apdu-length", 249);
 
 
   if (tunnel)
@@ -335,6 +336,7 @@ rt:
       s->no = 1;
       s->type = type;
       s->nat = r1.nat;
+      s->maxAPDULength = maxAPDULength;
       if(!conn->setup())
         return -1;
       if(!static_cast<Router &>(router).registerLink(conn, true))
@@ -1041,6 +1043,11 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
                       res[0] = 0;
                       res[1] = 0;
                       start = 0;
+                    }
+                  else if (prop == PID_MAX_APDULENGTH)
+                    {
+                      res.resize (2);
+                      res[1] = maxAPDULength;
                     }
                   else
                     count = 0;
