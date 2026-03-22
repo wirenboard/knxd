@@ -524,6 +524,78 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       return;
     }
 
+  if (p1.service == TUNNEL_FEATURE_GET)
+    {
+      // ISO 22510: TUNNELLING_FEATURE_GET
+      // data: connection header (4 bytes) + feature ID (1) + reserved (1)
+      if (p1.data.size() < 6 || p1.data[0] != 4)
+        {
+          t->TracePacket(2, "unparseable TUNNEL_FEATURE_GET", p1.data);
+          return;
+        }
+
+      reset_timer();
+
+      uint8_t chanID = p1.data[1];
+      uint8_t seqno = p1.data[2];
+      uint8_t featureID = p1.data[4];
+
+      auto channel = findChannel(chanID);
+      if (!channel)
+        {
+          TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET on unknown channel %d", chanID);
+          return;
+        }
+
+      TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET ch=%d feat=%d", chanID, featureID);
+
+      // Build TUNNEL_FEATURE_RESPONSE
+      EIBNetIPPacket resp;
+      resp.service = TUNNEL_FEATURE_RESPONSE;
+      // Connection header: len(4), channel, seqno, reserved
+      // Then: featureID, returnCode, featureValue...
+      switch (featureID)
+        {
+        case 0x01: // SupportedEMIType: cEMI
+          resp.data.resize(7);
+          resp.data[4] = featureID;
+          resp.data[5] = 0; // success
+          resp.data[6] = 0x04; // cEMI
+          break;
+        case 0x02: // HostDeviceDescriptorType0
+          resp.data.resize(8);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = 0x07;
+          resp.data[7] = 0x01;
+          break;
+        case 0x03: // BusConnectionStatus
+          resp.data.resize(7);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = 0x01; // connected
+          break;
+        case 0x07: // MaxAPDULength
+          resp.data.resize(8);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = (parent->maxAPDULength >> 8) & 0xFF;
+          resp.data[7] = parent->maxAPDULength & 0xFF;
+          break;
+        default:
+          resp.data.resize(6);
+          resp.data[4] = featureID;
+          resp.data[5] = 0x02; // E_FEATURE_NOT_SUPPORTED
+          break;
+        }
+      resp.data[0] = 4; // connection header length
+      resp.data[1] = chanID;
+      resp.data[2] = seqno;
+      resp.data[3] = 0;
+      send(resp);
+      return;
+    }
+
   if (p1.service == SEARCH_REQUEST_EXTENDED)
     {
       // ISO 22510: Extended search - ignore for now (ETS falls back gracefully)
