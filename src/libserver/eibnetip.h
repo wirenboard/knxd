@@ -148,6 +148,16 @@ enum TunnellingLayer : uint8_t
   TUNNEL_BUSMONITOR = 0x80,
 };
 
+/** Feature return codes for TUNNEL_FEATURE_RESPONSE */
+enum FeatureReturnCode : uint8_t
+{
+  FR_NO_ERROR = 0x00,
+  FR_ACCESS_READ_ONLY = 0x01,
+  FR_ADDRESS_VOID = 0x02,        // unknown feature
+  FR_DATA_TYPE_CONFLICT = 0x03,
+  FR_DATA_VOID = 0x04,
+};
+
 /* Timeout constants */
 constexpr ev::tstamp CONNECT_REQUEST_TIMEOUT = 10;
 constexpr ev::tstamp CONNECTIONSTATE_REQUEST_TIMEOUT = 10;

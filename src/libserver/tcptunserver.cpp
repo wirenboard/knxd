@@ -556,38 +556,162 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       // Then: featureID, returnCode, featureValue...
       switch (featureID)
         {
-        case 0x01: // SupportedEMIType: cEMI
-          resp.data.resize(7);
+        case 0x01: // SupportedEMIType: 2 bytes, bitfield (bit0=EMI1, bit1=EMI2, bit2=cEMI)
+          resp.data.resize(8);
           resp.data[4] = featureID;
-          resp.data[5] = 0; // success
-          resp.data[6] = 0x04; // cEMI
+          resp.data[5] = FR_NO_ERROR;
+          resp.data[6] = 0x00;
+          resp.data[7] = 0x04; // cEMI only
           break;
         case 0x02: // HostDeviceDescriptorType0
           resp.data.resize(8);
           resp.data[4] = featureID;
-          resp.data[5] = 0;
+          resp.data[5] = FR_NO_ERROR;
           resp.data[6] = 0x07;
           resp.data[7] = 0x01;
           break;
         case 0x03: // BusConnectionStatus
+          {
+            resp.data.resize(7);
+            resp.data[4] = featureID;
+            resp.data[5] = FR_NO_ERROR;
+            auto& router = static_cast<Router &>(parent->router);
+            resp.data[6] = router.isIdle() ? 0x00 : 0x01;
+          }
+          break;
+        case 0x04: // KNXManufacturerCode
+          resp.data.resize(8);
+          resp.data[4] = featureID;
+          resp.data[5] = FR_NO_ERROR;
+          resp.data[6] = (parent->manufacturerCode >> 8) & 0xFF;
+          resp.data[7] = parent->manufacturerCode & 0xFF;
+          break;
+        case 0x05: // ActiveEMIType: cEMI
           resp.data.resize(7);
           resp.data[4] = featureID;
-          resp.data[5] = 0;
-          resp.data[6] = 0x01; // connected
+          resp.data[5] = FR_NO_ERROR;
+          resp.data[6] = 0x04; // cEMI
+          break;
+        case 0x06: // InterfaceIndividualAddress
+          {
+            resp.data.resize(8);
+            resp.data[4] = featureID;
+            resp.data[5] = FR_NO_ERROR;
+            auto *llService = dynamic_cast<TunServiceLinkLayer *>(channel->service.get());
+            eibaddr_t addr = llService ? llService->knxaddr : 0;
+            resp.data[6] = (addr >> 8) & 0xFF;
+            resp.data[7] = addr & 0xFF;
+          }
           break;
         case 0x07: // MaxAPDULength
           resp.data.resize(8);
           resp.data[4] = featureID;
-          resp.data[5] = 0;
+          resp.data[5] = FR_NO_ERROR;
           resp.data[6] = (parent->maxAPDULength >> 8) & 0xFF;
           resp.data[7] = parent->maxAPDULength & 0xFF;
+          break;
+        case 0x08: // InterfaceFeatureInfoEnable
+          resp.data.resize(7);
+          resp.data[4] = featureID;
+          resp.data[5] = FR_NO_ERROR;
+          resp.data[6] = channel->featureInfoEnabled ? 0x01 : 0x00;
           break;
         default:
           resp.data.resize(6);
           resp.data[4] = featureID;
-          resp.data[5] = 0x02; // E_FEATURE_NOT_SUPPORTED
+          resp.data[5] = FR_ADDRESS_VOID;
           break;
         }
+      resp.data[0] = 4; // connection header length
+      resp.data[1] = chanID;
+      resp.data[2] = seqno;
+      resp.data[3] = 0;
+      send(resp);
+      return;
+    }
+
+  if (p1.service == TUNNEL_FEATURE_SET)
+    {
+      // ISO 22510: TUNNELLING_FEATURE_SET
+      // data: connection header (4 bytes) + featureID (1) + reserved (1) + value (n)
+      if (p1.data.size() < 6 || p1.data[0] != 4)
+        {
+          t->TracePacket(2, "unparseable TUNNEL_FEATURE_SET", p1.data);
+          return;
+        }
+
+      reset_timer();
+
+      uint8_t chanID = p1.data[1];
+      uint8_t seqno = p1.data[2];
+      uint8_t featureID = p1.data[4];
+
+      auto channel = findChannel(chanID);
+      if (!channel)
+        {
+          TRACEPRINTF (t, 8, "TUNNEL_FEATURE_SET on unknown channel %d", chanID);
+          return;
+        }
+
+      TRACEPRINTF (t, 8, "TUNNEL_FEATURE_SET ch=%d feat=%d", chanID, featureID);
+
+      // Build TUNNEL_FEATURE_RESPONSE
+      EIBNetIPPacket resp;
+      resp.service = TUNNEL_FEATURE_RESPONSE;
+
+      switch (featureID)
+        {
+        case 0x01: // SupportedEMIType — read-only
+        case 0x02: // HostDeviceDescriptorType0 — read-only
+        case 0x03: // BusConnectionStatus — read-only
+        case 0x04: // KNXManufacturerCode — read-only
+        case 0x05: // ActiveEMIType — read-only
+        case 0x06: // InterfaceIndividualAddress — read-only (no KNX Secure)
+        case 0x07: // MaxAPDULength — read-only
+          {
+            // Echo value from request, capped to 2 bytes (no feature uses more)
+            size_t valueLen = p1.data.size() - 6;
+            if (valueLen > 2)
+              valueLen = 2;
+            resp.data.resize(6 + valueLen);
+            resp.data[4] = featureID;
+            resp.data[5] = FR_ACCESS_READ_ONLY;
+            for (size_t i = 0; i < valueLen; i++)
+              resp.data[6 + i] = p1.data[6 + i];
+          }
+          break;
+        case 0x08: // InterfaceFeatureInfoEnable — writable
+          {
+            if (p1.data.size() < 7)
+              {
+                resp.data.resize(6);
+                resp.data[4] = featureID;
+                resp.data[5] = FR_DATA_TYPE_CONFLICT;
+                break;
+              }
+            uint8_t val = p1.data[6];
+            if (val > 0x01)
+              {
+                resp.data.resize(7);
+                resp.data[4] = featureID;
+                resp.data[5] = FR_DATA_VOID;
+                resp.data[6] = val;
+                break;
+              }
+            channel->featureInfoEnabled = (val == 0x01);
+            resp.data.resize(7);
+            resp.data[4] = featureID;
+            resp.data[5] = FR_NO_ERROR;
+            resp.data[6] = val;
+          }
+          break;
+        default: // Unknown feature — FR_ADDRESS_VOID, no value
+          resp.data.resize(6);
+          resp.data[4] = featureID;
+          resp.data[5] = FR_ADDRESS_VOID;
+          break;
+        }
+
       resp.data[0] = 4; // connection header length
       resp.data[1] = chanID;
       resp.data[2] = seqno;
@@ -662,6 +786,7 @@ TcpTunServer::setup()
     int v = cfg->value("max-apdu-length", -1);
     maxAPDULength = (v >= 0) ? v : 0;
   }
+  manufacturerCode = cfg->value("manufacturer-code", 0);
   ignore_when_systemd = cfg->value("systemd-ignore", port == 3671);
 
   /* Check that we have client addresses. */
