@@ -419,7 +419,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           }
 
           auto chan = std::make_shared<TunChannel>(shared_from_this(), newChannelID);
-          chan->setService(std::make_shared<TunServiceConfig>(chan));
+          chan->setService(std::make_shared<TunServiceConfig>(chan, parent->maxAPDULength));
 
           if (openChannel(chan))
             {
@@ -586,6 +586,7 @@ TcpTunServer::setup()
     return false;
   port = cfg->value("port", 3671);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
+  maxAPDULength = cfg->value("max-apdu-length", 249);
   ignore_when_systemd = cfg->value("systemd-ignore", port == 3671);
 
   /* Check that we have client addresses. */

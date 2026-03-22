@@ -103,6 +103,7 @@ private:
 protected:
   /** config */
   ev::tstamp keepalive;
+  uint16_t maxAPDULength = 249;
   IniSectionPtr tunnel_cfg;
 };
 

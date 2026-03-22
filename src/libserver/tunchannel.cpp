@@ -325,8 +325,8 @@ void TunServiceBusMonitor::send_L_Busmonitor(LBusmonPtr l)
   no++;
 }
 
-TunServiceConfig::TunServiceConfig(const TunChannelPtr& channel)
-  : TunService(channel)
+TunServiceConfig::TunServiceConfig(const TunChannelPtr& channel, uint16_t maxAPDULength)
+  : TunService(channel), maxAPDULength(maxAPDULength)
 {
 }
 
@@ -376,7 +376,7 @@ ErrorCode TunServiceConfig::handleConfigRequest(EIBnet_ConfigRequest &r1)
               else if (prop == PID_MAX_APDULENGTH)
                 {
                   res.resize (2);
-                  res[1] = 0xF9;
+                  res[1] = maxAPDULength & 0xFF;
                 }
               else
                 count = 0;
