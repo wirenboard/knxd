@@ -78,7 +78,7 @@ public:
   ConnType type = CT_NONE;
   int no;
   bool nat;
-  uint8_t maxAPDULength;
+  uint16_t maxAPDULength;
 
   ev::timer timeout;
   void timeout_cb(ev::timer &w, int revents);
@@ -188,7 +188,7 @@ private:
   std::string interface;
   std::string servername;
   ev::tstamp keepalive;
-  uint8_t maxAPDULength;
+  uint16_t maxAPDULength;
   IniSectionPtr router_cfg;
   IniSectionPtr tunnel_cfg;
 

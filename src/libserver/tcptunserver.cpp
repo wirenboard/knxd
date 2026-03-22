@@ -658,7 +658,10 @@ TcpTunServer::setup()
     return false;
   port = cfg->value("port", 3671);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
-  maxAPDULength = cfg->value("max-apdu-length", 249);
+  {
+    int v = cfg->value("max-apdu-length", -1);
+    maxAPDULength = (v >= 0) ? v : 0;
+  }
   ignore_when_systemd = cfg->value("systemd-ignore", port == 3671);
 
   /* Check that we have client addresses. */
@@ -675,6 +678,9 @@ void
 TcpTunServer::start()
 {
   int reuse = 1;
+
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
 
   if (ignore_when_systemd && static_cast<Router &>(router).using_systemd)
     {
@@ -753,6 +759,9 @@ void
 UnixTunServer::start()
 {
   int reuse = 1;
+
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
 
   if (ignore_when_systemd && static_cast<Router &>(router).using_systemd)
     {
@@ -837,6 +846,9 @@ TcpTunSystemdServer::TcpTunSystemdServer(BaseRouter& r, IniSectionPtr& s, int sy
 void
 TcpTunSystemdServer::start()
 {
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
+
   TRACEPRINTF (t, 8, "OpenSystemdSocket %d", fd);
   if (fd < 0)
     {
