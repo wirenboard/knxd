@@ -493,6 +493,37 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       return;
     }
 
+  if (p1.service == DESCRIPTION_REQUEST)
+    {
+      EIBnet_DescriptionRequest r1;
+      EIBnet_DescriptionResponse r2;
+      DIB_service_Entry d;
+      if (parseEIBnet_DescriptionRequest(p1, r1))
+        {
+          t->TracePacket(2, "unparseable DESCRIPTION_REQUEST", p1.data);
+          return;
+        }
+
+      TRACEPRINTF (t, 8, "DESCRIBE");
+
+      Router& router = static_cast<Router &>(parent->router);
+      r2.KNXmedium = 2;
+      r2.devicestatus = 0;
+      r2.individual_addr = router.addr;
+      r2.installid = 0;
+      inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
+      strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
+      d.version = 2; // v2 = TCP support (ISO 22510)
+      d.family = 2; // Core
+      r2.services.push_back(d);
+      d.family = 3; // Device Management
+      r2.services.push_back(d);
+      d.family = 4; // Tunnelling
+      r2.services.push_back(d);
+      send(r2.ToPacket(IPV4_TCP));
+      return;
+    }
+
   TRACEPRINTF (t, 8, "Unexpected service type: %04x", p1.service);
 }
 
