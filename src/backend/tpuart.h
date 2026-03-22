@@ -52,6 +52,11 @@ public:
   virtual ~TPUART() = default;
 
   bool setup();
+
+  // TPUART: 64-byte send buffer, U_L_DataContinue index 1-62,
+  // U_L_DataEnd length 7-63. No U_L_DataOffset support.
+  unsigned int maxFrameLength() const override { return 63; }
+
 protected:
   virtual LowLevelFilter * create_wrapper(LowLevelIface* parent, IniSectionPtr& s, LowLevelDriver* i = nullptr);
 };
@@ -75,6 +80,12 @@ protected:
   void do__send_Next();
   void send_again();
   void in_check();
+
+  /** Encode KNX frame bytes into UART command sequence.
+   *  Base: standard TPUART 6-bit index (max 63 bytes).
+   *  Override for chips with extended frame support (NCN5120, Elmos).
+   */
+  virtual void encode_frame(const CArray& frame, CArray& uart_buf);
 
   /** OK to send next packet */
   bool next_free = true;

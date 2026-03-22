@@ -103,6 +103,8 @@ private:
 protected:
   /** config */
   ev::tstamp keepalive;
+  uint16_t maxAPDULength = 0;
+  uint16_t manufacturerCode = 0;
   IniSectionPtr tunnel_cfg;
 };
 

@@ -204,6 +204,22 @@ TPUARTwrap::do__send_Next()
 }
 
 void
+TPUARTwrap::encode_frame(const CArray& frame, CArray& uart_buf)
+{
+  // Standard TPUART: 6-bit index, 2 UART bytes per KNX byte, max 63 bytes.
+  // U_L_DataStart/Continue = 0x80 | (index & 0x3F), U_L_DataEnd = 0x40 | (index & 0x3F)
+  unsigned z = frame.size();
+  uart_buf.resize(z * 2);
+  for (unsigned i = 0; i < z; i++)
+    {
+      uart_buf[2 * i] = 0x80 | (i & 0x3f);
+      uart_buf[2 * i + 1] = frame[i];
+    }
+  unsigned last = (z - 1) * 2;
+  uart_buf[last] = (uart_buf[last] & 0x3f) | 0x40;
+}
+
+void
 TPUARTwrap::send_again()
 {
   if (out.size() > 0 && state > T_is_online && state < T_busmonitor)
@@ -215,17 +231,7 @@ TPUARTwrap::send_again()
         }
 
       CArray w;
-      unsigned i;
-      unsigned z = out.size();
-
-      w.resize (z * 2);
-      for (i = 0; i < z; i++)
-        {
-          w[2 * i] = 0x80 | (i & 0x3f);
-          w[2 * i + 1] = out[i];
-        }
-      z = (z - 1) * 2;
-      w[z] = (w[z] & 0x3f) | 0x40;
+      encode_frame(out, w);
       LowLevelFilter::send_Data(w);
       sendtimer.start(2,0);
 
@@ -248,6 +254,7 @@ TPUARTwrap::started()
 void
 TPUARTwrap::stopped(bool err)
 {
+  ERRORPRINTF (t, E_WARNING | 119, "TPUARTwrap::stopped(err=%d) in state %s", err, SN(state));
   setstate(T_new);
 
   LowLevelFilter::stopped(err);
@@ -295,11 +302,12 @@ TPUARTwrap::sendtimer_cb(ev::timer &, int)
 {
   if (send_retry++ > 3)
     {
-      ERRORPRINTF (t, E_ERROR | 43, "send timeout: too many retries");
+      ERRORPRINTF (t, E_ERROR | 43, "send timeout: too many retries (%d) in state %s, going to error",
+                   send_retry, SN(state));
       setstate(T_error);
       return;
-    } // TODO error
-  TRACEPRINTF (t, 8, "send timeout: retry");
+    }
+  TRACEPRINTF (t, 8, "send timeout: retry %d in state %s", send_retry, SN(state));
   send_again();
 }
 
@@ -309,6 +317,7 @@ TPUARTwrap::timer_cb(ev::timer &, int)
   switch(state)
     {
     case T_error:
+      ERRORPRINTF (t, E_ERROR | 44, "timer in T_error state, calling stop(true)");
       stop(true);
       break;
     case T_new:
@@ -316,18 +325,22 @@ TPUARTwrap::timer_cb(ev::timer &, int)
     case T_in_reset:
       if (retry < 3)
         {
+          TRACEPRINTF (t, 8, "reset timeout, retry %d/3", retry);
           setstate(T_in_reset);
           return;
         }
+      ERRORPRINTF (t, E_ERROR | 45, "reset timeout after %d retries, going to error", retry);
       setstate(T_error);
       break;
 
     case T_in_getstate:
       if (retry > 5)
         {
+          ERRORPRINTF (t, E_ERROR | 46, "getstate timeout after %d retries, calling stop(true)", retry);
           stop(true);
           return;
         }
+      TRACEPRINTF (t, 8, "getstate timeout, retry %d", retry);
       setstate(state);
       break;
 
@@ -351,9 +364,11 @@ TPUARTwrap::timer_cb(ev::timer &, int)
     case T_wait_keepalive:
       if (retry > 2)
         {
+          ERRORPRINTF (t, E_WARNING | 118, "keepalive timeout after %d retries, going to reset", retry);
           setstate(T_in_reset);
           return;
         }
+      TRACEPRINTF (t, 8, "keepalive timeout, retry %d/2", retry);
       setstate(T_wait_keepalive);
       break;
     default:
@@ -495,7 +510,11 @@ TPUARTwrap::recv_Data(CArray &c)
         {
           TRACEPRINTF (t, 8, "State: %02X", c);
           if (c != 0x07)
-            ERRORPRINTF (t, E_WARNING | 116, "TPUART error state x%02X", c);
+            ERRORPRINTF (t, E_WARNING | 116, "TPUART error state x%02X in state %s"
+                         " (sc=%d re=%d te=%d pe=%d tw=%d)",
+                         c, SN(state),
+                         (c >> 7) & 1, (c >> 6) & 1, (c >> 5) & 1,
+                         (c >> 4) & 1, (c >> 3) & 1);
 
           switch(state)
             {
@@ -518,7 +537,8 @@ TPUARTwrap::recv_Data(CArray &c)
               break;
 
             default:
-              ERRORPRINTF (t, E_WARNING | 117, "TPUART state %s should not happen", SN(state));
+              ERRORPRINTF (t, E_WARNING | 117, "TPUART state indication x%02X"
+                           " unexpected in state %s, ignoring", c, SN(state));
               break;
             }
         }
