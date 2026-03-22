@@ -162,6 +162,10 @@ EIBnetServer::setup()
   interface = cfg->value("interface","");
   servername = cfg->value("name", dynamic_cast<Router *>(&router)->servername);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
+  {
+    int v = cfg->value("max-apdu-length", -1);
+    maxAPDULength = (v >= 0) ? v : 0;
+  }
 
 
   if (tunnel)
@@ -188,6 +192,9 @@ EIBnetServer::start()
 {
   struct sockaddr_in baddr;
   LinkConnectClientPtr mcast_conn;
+
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
 
   TRACEPRINTF (t, 8, "Open");
 
@@ -335,6 +342,7 @@ rt:
       s->no = 1;
       s->type = type;
       s->nat = r1.nat;
+      s->maxAPDULength = maxAPDULength;
       if(!conn->setup())
         return -1;
       if(!static_cast<Router &>(router).registerLink(conn, true))
@@ -1041,6 +1049,12 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
                       res[0] = 0;
                       res[1] = 0;
                       start = 0;
+                    }
+                  else if (prop == PID_MAX_APDULENGTH)
+                    {
+                      res.resize (2);
+                      res[0] = (maxAPDULength >> 8) & 0xFF;
+                      res[1] = maxAPDULength & 0xFF;
                     }
                   else
                     count = 0;

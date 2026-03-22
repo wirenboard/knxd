@@ -4,13 +4,14 @@ knxd [![CI](https://github.com/knxd/knxd/actions/workflows/ci.yml/badge.svg)](ht
 KNX is a very common building automation protocol which runs on dedicated 9600-baud wire as well as IP multicast.
 ``knxd`` is an advanced router/gateway which runs on any Linux computer; it can talk to all known KNX interfaces.
 
-# STOP if you install on Debian (or Ubuntu or …)
+# STOP if you are not on Debian (or Ubuntu or …)
 
-Debian/Ubuntu packaging has moved to the ``debian`` branch. Please use that
-branch (by way of ``git checkout debian``) if you're following some (outdated …)
-installation instructions for Debian, Ubuntu or their derivatives.
+This is the ``debian`` branch, which includes Debian-specific packaging and
+some minor related changes. If you're using some other Linux flavor, please
+check out the corresponding branch, or use ``main`` for "manual"
+installation to ``/usr/local``.
 
-In the ``debian`` branch, this file contains build instructions for Debian.
+Otherwise see the installation instructions, below.
 
 # Stable version
 
@@ -56,6 +57,10 @@ to knxd's options.
 ## New Features since 0.12
 
 ### see https://github.com/knxd/knxd/blob/v0.12/README.md for earlier changes
+
+* 0.14.51
+
+  * Added a "heartbeat-timeout" option to the tunnel server
 
 * 0.14.41
 
@@ -198,32 +203,93 @@ please also see: [eibd(war bcusdk) Fork -> knxd](http://knx-user-forum.de/forum/
 
 ## Building
 
-When in doubt, please check out the branch corresponding to your Linux
-distribution's flavor, and read this section there.
+Run these steps as normal user, not as root.
 
-This part covers "manual" installation.
+On Debian/Ubuntu:
 
-    # first, install build tools and dependencies. You need git, autotools, and gcc/g++.
-    #: check your Linux distribution's documentation if you don't know how
-    # You also need a "knxd" user.
+    sudo apt-get install git
 
     # get the source code
-    git clone https://github.com/knxd/knxd.git
+    git clone -b debian https://github.com/knxd/knxd.git
 
-    # build+install knxd
+    # now build+install knxd
+    sh knxd/install-debian.sh
+
+That's all (well, except for configuring knxd).
+
+For updating:
+
     cd knxd
-    git checkout main
-    sh bootstrap.sh
-    ./configure --help
-    ./configure --your-chosen-options
-    make -j$(nproc)
-    make install
-    cd ..
+    git pull
+    sh install-debian.sh
 
-    # Now switch to the "knxd" user and start the daemon.
+The `knxd/install-debian.sh` script should work without problems on any
+up-to-date Debian or Debian-derived system. If not, please do this before
+filing an issue:
+
+* Verify that your system is 100% up-to-date.
+
+* Verify that you did not pin any packages, either via ``aptitude`` or
+  ``/etc/apt/preferences``.
+
+* Otherwise, installing the file ``knxd-build-deps_*.deb`` with ``dpkg``
+  and resolving its dependencies via ``aptitude -f install`` should fix
+  whatever happens to be wrong with your system. Remove the build-deps
+  package *without* auto-removing the ``-dev`` packages it depends on, then
+  try again.
+
+* If that doesn't work either, open an issue. Add the log from the
+  previous step.
+
+Instructions for other flavors of Linux distributions should be in the
+corresponding branches. Additions welcome.
+
+On MacOS or Windows, please use a Linux VM.
 
 If you would like to submit patches for Mac OSX or Windows, go ahead
 and create a pull request, but please be prepared to maintain your code.
+
+### Test failures
+
+The build script runs a comprehensive set of tests to make sure that knxd
+actually works. It obviously can't test code that talks to directly-connected
+hardware, but the core parts are exercised.
+
+If the test fails:
+
+* Do you have a default route?
+
+* Are you filtering packets to multicast address 224.99.98.97, or to UDP port 3671?
+
+* Is something on your network echoing multicast packets? (Yes, that happens.)
+
+If you can't figure out the cause of the failure, please open an issue.
+
+### Daemon Configuration
+
+Daemon configuration differs depending on whether you use systemd.
+If "systemctl status" emits something reasonable, you are.
+
+If you use systemd, the configuration file is ``/etc/knxd.conf``.
+Socket activation is used for the default IP and Unix sockets
+(port 6720 and /run/knx, respectively).
+
+Without systemd, on Debian, edit ``/etc/default/knxd``.
+
+The default Unix socket is ``/run/knx``.
+Old eibd clients may still use ``/tmp/eib`` to talk to knxd.
+You need to either change their configuration, or add "-u /tmp/eib"
+to knxd's options.
+(This was the default for "-u" before version 0.11.)
+
+
+### New ".ini" configuration file
+
+knxd is typically started with "knxd /etc/knxd.ini".
+
+The file format is documented in "doc/inifile.rst". You might want to use
+the program "/usr/lib/knxd_args" to create it from previous versions'
+command-line arguments.
 
 
 ### Adding a TPUART USB interface (serial, USB)

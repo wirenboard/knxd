@@ -1,0 +1,5 @@
+etc/knxd.conf
+${env:deb_systemdsystemunitdir}/knxd.service
+${env:deb_systemdsystemunitdir}/knxd.socket
+${env:deb_systemdsystemunitdir}/knxd-net.socket
+usr/lib/sysusers.d

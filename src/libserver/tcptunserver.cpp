@@ -419,7 +419,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           }
 
           auto chan = std::make_shared<TunChannel>(shared_from_this(), newChannelID);
-          chan->setService(std::make_shared<TunServiceConfig>(chan));
+          chan->setService(std::make_shared<TunServiceConfig>(chan, parent->maxAPDULength));
 
           if (openChannel(chan))
             {
@@ -493,6 +493,116 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       return;
     }
 
+  if (p1.service == DESCRIPTION_REQUEST)
+    {
+      EIBnet_DescriptionRequest r1;
+      EIBnet_DescriptionResponse r2;
+      DIB_service_Entry d;
+      if (parseEIBnet_DescriptionRequest(p1, r1))
+        {
+          t->TracePacket(2, "unparseable DESCRIPTION_REQUEST", p1.data);
+          return;
+        }
+
+      TRACEPRINTF (t, 8, "DESCRIBE");
+
+      Router& router = static_cast<Router &>(parent->router);
+      r2.KNXmedium = 2;
+      r2.devicestatus = 0;
+      r2.individual_addr = router.addr;
+      r2.installid = 0;
+      inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
+      strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
+      d.version = 2; // v2 = TCP support (ISO 22510)
+      d.family = 2; // Core
+      r2.services.push_back(d);
+      d.family = 3; // Device Management
+      r2.services.push_back(d);
+      d.family = 4; // Tunnelling
+      r2.services.push_back(d);
+      send(r2.ToPacket(IPV4_TCP));
+      return;
+    }
+
+  if (p1.service == TUNNEL_FEATURE_GET)
+    {
+      // ISO 22510: TUNNELLING_FEATURE_GET
+      // data: connection header (4 bytes) + feature ID (1) + reserved (1)
+      if (p1.data.size() < 6 || p1.data[0] != 4)
+        {
+          t->TracePacket(2, "unparseable TUNNEL_FEATURE_GET", p1.data);
+          return;
+        }
+
+      reset_timer();
+
+      uint8_t chanID = p1.data[1];
+      uint8_t seqno = p1.data[2];
+      uint8_t featureID = p1.data[4];
+
+      auto channel = findChannel(chanID);
+      if (!channel)
+        {
+          TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET on unknown channel %d", chanID);
+          return;
+        }
+
+      TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET ch=%d feat=%d", chanID, featureID);
+
+      // Build TUNNEL_FEATURE_RESPONSE
+      EIBNetIPPacket resp;
+      resp.service = TUNNEL_FEATURE_RESPONSE;
+      // Connection header: len(4), channel, seqno, reserved
+      // Then: featureID, returnCode, featureValue...
+      switch (featureID)
+        {
+        case 0x01: // SupportedEMIType: cEMI
+          resp.data.resize(7);
+          resp.data[4] = featureID;
+          resp.data[5] = 0; // success
+          resp.data[6] = 0x04; // cEMI
+          break;
+        case 0x02: // HostDeviceDescriptorType0
+          resp.data.resize(8);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = 0x07;
+          resp.data[7] = 0x01;
+          break;
+        case 0x03: // BusConnectionStatus
+          resp.data.resize(7);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = 0x01; // connected
+          break;
+        case 0x07: // MaxAPDULength
+          resp.data.resize(8);
+          resp.data[4] = featureID;
+          resp.data[5] = 0;
+          resp.data[6] = (parent->maxAPDULength >> 8) & 0xFF;
+          resp.data[7] = parent->maxAPDULength & 0xFF;
+          break;
+        default:
+          resp.data.resize(6);
+          resp.data[4] = featureID;
+          resp.data[5] = 0x02; // E_FEATURE_NOT_SUPPORTED
+          break;
+        }
+      resp.data[0] = 4; // connection header length
+      resp.data[1] = chanID;
+      resp.data[2] = seqno;
+      resp.data[3] = 0;
+      send(resp);
+      return;
+    }
+
+  if (p1.service == SEARCH_REQUEST_EXTENDED)
+    {
+      // ISO 22510: Extended search - ignore for now (ETS falls back gracefully)
+      TRACEPRINTF (t, 8, "SEARCH_REQUEST_EXTENDED (ignored)");
+      return;
+    }
+
   TRACEPRINTF (t, 8, "Unexpected service type: %04x", p1.service);
 }
 
@@ -548,6 +658,10 @@ TcpTunServer::setup()
     return false;
   port = cfg->value("port", 3671);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
+  {
+    int v = cfg->value("max-apdu-length", -1);
+    maxAPDULength = (v >= 0) ? v : 0;
+  }
   ignore_when_systemd = cfg->value("systemd-ignore", port == 3671);
 
   /* Check that we have client addresses. */
@@ -564,6 +678,9 @@ void
 TcpTunServer::start()
 {
   int reuse = 1;
+
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
 
   if (ignore_when_systemd && static_cast<Router &>(router).using_systemd)
     {
@@ -642,6 +759,9 @@ void
 UnixTunServer::start()
 {
   int reuse = 1;
+
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
 
   if (ignore_when_systemd && static_cast<Router &>(router).using_systemd)
     {
@@ -726,6 +846,9 @@ TcpTunSystemdServer::TcpTunSystemdServer(BaseRouter& r, IniSectionPtr& s, int sy
 void
 TcpTunSystemdServer::start()
 {
+  if (maxAPDULength == 0)
+    maxAPDULength = static_cast<Router &>(router).maxFrameLength() - 8;
+
   TRACEPRINTF (t, 8, "OpenSystemdSocket %d", fd);
   if (fd < 0)
     {

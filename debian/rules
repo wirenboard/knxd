@@ -1,0 +1,59 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+# Uncomment this to turn on verbose mode.
+export DH_VERBOSE=1
+export DEB_BUILD_MAINT_OPTIONS=hardening=+all
+
+# This has to be exported to make some magic below work.
+export DH_OPTIONS
+
+# For backwards compatibility to <= Bookworm, can be removed when Trixie is the minimum supported release, also update knxd.install.systemd then
+export deb_systemdsystemunitdir = $(shell pkg-config --variable=systemdsystemunitdir systemd | sed s,^/,,)
+
+%:
+	dh $@
+
+override_dh_clean:
+	dh_clean
+	rm -f debian/knxd.install
+	rm -f debian/knxd.service
+	rm -f debian/knxd.socket
+	rm -f debian/knxd-net.socket
+	rm -f debian/knxd.udev
+
+override_dh_auto_configure: configure install-sh
+	dh_auto_configure -- --enable-usb --enable-groupcache --enable-ft12 --enable-tpuart --enable-dummy --libexecdir=/usr/lib --enable-dependency-tracking
+
+configure install-sh: configure.ac
+	sh bootstrap.sh
+
+override_dh_install: debian/knxd.install debian/knxd.service debian/knxd.socket debian/knxd-net.socket debian/knxd.udev
+	dh_install
+
+override_dh_installsystemd:
+	dh_installsystemd -pknxd knxd.service knxd.socket knxd-net.socket
+	dh_installsystemd --remaining-packages
+
+override_dh_compress:
+	dh_compress -X.rst
+
+debian/knxd.install: debian/knxd.install.in debian/knxd.install.systemd
+	cp $@.in $@
+	grep -qs 'HAVE_SYSTEMD_TRUE.*#' config.status || cat $@.systemd >> $@
+
+debian/knxd.service: systemd/knxd.service
+	cp $^ $@
+debian/knxd.socket: systemd/knxd.socket
+	cp $^ $@
+debian/knxd-net.socket: systemd/knxd-net.socket
+	cp $^ $@
+debian/knxd.udev: systemd/knxd.udev
+	cp $^ $@
+
+systemd/knxd.socket systemd/knxd-net.socket systemd/knxd.service:
+	$(MAKE) -C systemd
+
+override_dh_auto_test:
+	bash tools/test.sh || true
+	# test run is not authoritative because it uses multicast

@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+        configure)
+		addgroup --system knxd
+		adduser --system --disabled-login --home /var/lib/knxd --ingroup knxd knxd
+		## for updates
+		if ! test -d /var/lib/knxd ; then
+			mkdir /var/lib/knxd
+			chown knxd:knxd /var/lib/knxd
+		fi
+
+        # wb-knxd-config restart
+        deb-systemd-invoke try-restart wb-knxd-config.service >/dev/null || true
+		;;
+esac
+
+#DEBHELPER#
+
