@@ -524,6 +524,13 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       return;
     }
 
+  if (p1.service == SEARCH_REQUEST_EXTENDED)
+    {
+      // ISO 22510: Extended search - ignore for now (ETS falls back gracefully)
+      TRACEPRINTF (t, 8, "SEARCH_REQUEST_EXTENDED (ignored)");
+      return;
+    }
+
   TRACEPRINTF (t, 8, "Unexpected service type: %04x", p1.service);
 }
 
