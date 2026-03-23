@@ -156,6 +156,7 @@ EIBnetServer::setup()
   route = router_cfg->name.size() > 0;
   tunnel = tunnel_cfg->name.size() > 0;
   discover = cfg->value("discover",false);
+  secure = cfg->value("secure",false);
   single_port = !cfg->value("multi-port",false);
   multicastaddr = cfg->value("multicast-address","224.0.23.12");
   port = cfg->value("port",3671);
@@ -595,21 +596,38 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = 1;
-      d.family = 2; // core
+      // version 2 = KNXnet/IP v2 with TCP support (ISO 22510)
+      d.version = secure ? 2 : 1;
+      d.family = SF_CORE;
       r2.services.push_back (d);
-      //d.family = 3; // device management
-      //r2.services.add (d);
-      d.family = 4;
+      d.family = SF_TUNNELLING;
       if (tunnel)
         r2.services.push_back (d);
-      d.family = 5;
+      d.family = SF_ROUTING;
       if (route)
+        r2.services.push_back (d);
+      d.family = SF_SECURITY;
+      if (secure)
         r2.services.push_back (d);
       if (!GetSourceAddress (t, &r1.caddr, &r2.caddr))
         goto out;
       r2.caddr.sin_port = Port;
-      isock->Send (r2.ToPacket (), r1.caddr);
+      {
+        EIBNetIPPacket pkt = r2.ToPacket ();
+        // Append Secure Service Families DIB (type 0x06) for ETS
+        if (secure)
+          {
+            size_t off = pkt.data.size();
+            pkt.data.resize(off + 6);
+            pkt.data[off + 0] = 6;
+            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
+            pkt.data[off + 3] = 0x01;
+            pkt.data[off + 4] = SF_TUNNELLING;
+            pkt.data[off + 5] = 0x01;
+          }
+        isock->Send (pkt, r1.caddr);
+      }
       goto out;
     }
 
@@ -634,17 +652,20 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = 1;
-      d.family = 2;
+      d.version = secure ? 2 : 1;
+      d.family = SF_CORE;
       if (discover)
         r2.services.push_back (d);
-      d.family = 3;
+      d.family = SF_DEVICE_MANAGEMENT;
       r2.services.push_back (d);
-      d.family = 4;
+      d.family = SF_TUNNELLING;
       if (tunnel)
         r2.services.push_back (d);
-      d.family = 5;
+      d.family = SF_ROUTING;
       if (route)
+        r2.services.push_back (d);
+      d.family = SF_SECURITY;
+      if (secure)
         r2.services.push_back (d);
       isock->Send (r2.ToPacket (), r1.caddr);
       goto out;

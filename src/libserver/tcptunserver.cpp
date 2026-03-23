@@ -191,6 +191,15 @@ void TcpTunConn::stop(bool err)
 {
   TRACEPRINTF (t, 8, "Stop Conn");
 
+#ifdef HAVE_IPSECURE
+  // Clean up secure session
+  if (secure_session_id != 0)
+    {
+      parent->ip_secure.removeSession(secure_session_id);
+      secure_session_id = 0;
+    }
+#endif
+
   // Close all channels
   while (true)
     {
@@ -235,6 +244,24 @@ TcpTunConn::send(const EIBNetIPPacket& p)
 {
   CArray data = p.ToPacket();
 
+#ifdef HAVE_IPSECURE
+  // If this connection has an active secure session, wrap in SECURE_WRAPPER
+  if (secure_session_id != 0)
+    {
+      auto wrapped = parent->ip_secure.wrapSecure(secure_session_id,
+                                                    data.data(), data.size());
+      if (wrapped.empty())
+        {
+          TRACEPRINTF(t, 2, "IP Secure: wrap failed for session %d", secure_session_id);
+          return;
+        }
+      t->TracePacket(0, "TCP send (secure)", wrapped.size(), wrapped.data());
+      if (fd >= 0)
+        sendbuf.write(wrapped.data(), wrapped.size());
+      return;
+    }
+#endif
+
   t->TracePacket(0, "TCP send", data.size(), data.data());
 
   if (fd >= 0)
@@ -244,6 +271,153 @@ TcpTunConn::send(const EIBNetIPPacket& p)
 void
 TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
 {
+#ifdef HAVE_IPSECURE
+  // KNX IP Secure: handle SESSION_REQUEST (unencrypted)
+#ifdef HAVE_IPSECURE
+  if (p1.service == SESSION_REQUEST_SVC && parent->ip_secure.isEnabled())
+    {
+      CArray raw = p1.ToPacket();
+      auto resp = parent->ip_secure.handleSessionRequest(raw.data(), raw.size());
+      if (resp.empty())
+        {
+          TRACEPRINTF(t, 2, "IP Secure: SESSION_REQUEST rejected");
+          return;
+        }
+      // Extract session ID from response (bytes 6-7)
+      secure_session_id = ((uint16_t)resp[6] << 8) | resp[7];
+      TRACEPRINTF(t, 2, "IP Secure: new session %d", secure_session_id);
+      t->TracePacket(0, "TCP send SESSION_RESPONSE", resp.size(), resp.data());
+      if (fd >= 0)
+        sendbuf.write(resp.data(), resp.size());
+      reset_timer();
+      return;
+    }
+#endif
+
+  // KNX IP Secure: unwrap SECURE_WRAPPER
+  if (p1.service == SECURE_WRAPPER_SVC && secure_session_id != 0)
+    {
+      CArray raw = p1.ToPacket();
+      uint16_t sid = 0;
+      auto inner = parent->ip_secure.unwrapSecure(raw.data(), raw.size(), sid);
+      if (inner.empty())
+        {
+          TRACEPRINTF(t, 2, "IP Secure: SECURE_WRAPPER decrypt/verify failed");
+          return;
+        }
+      if (sid != secure_session_id)
+        {
+          TRACEPRINTF(t, 2, "IP Secure: session ID mismatch %d != %d", sid, secure_session_id);
+          return;
+        }
+
+      t->TracePacket(0, "IP Secure unwrapped", inner.size(), inner.data());
+      reset_timer();
+
+      // Parse the inner KNXnet/IP frame
+      CArray inner_arr(inner.data(), inner.size());
+      std::unique_ptr<EIBNetIPPacket> inner_pkt(
+        EIBNetIPPacket::fromPacket(inner_arr, routeBackAddr(), IPV4_TCP));
+      if (!inner_pkt)
+        {
+          TRACEPRINTF(t, 2, "IP Secure: cannot parse inner packet");
+          return;
+        }
+
+      // Handle SESSION_AUTHENTICATE
+      if (inner_pkt->service == SESSION_AUTHENTICATE_SVC)
+        {
+          bool ok = parent->ip_secure.handleSessionAuthenticate(
+            secure_session_id, inner.data(), inner.size());
+          if (ok)
+            {
+#ifdef HAVE_IPSECURE
+              auto* session = parent->ip_secure.findSession(secure_session_id);
+              TRACEPRINTF(t, 2, "IP Secure: session %d authenticated (user %d)",
+                          secure_session_id, session ? session->user_id : 0);
+              auto status = parent->ip_secure.buildSessionStatus(
+                secure_session_id, STATUS_AUTH_SUCCESS);
+              if (!status.empty())
+                {
+                  t->TracePacket(0, "TCP send SESSION_STATUS (success)", status.size(), status.data());
+                  if (fd >= 0)
+                    sendbuf.write(status.data(), status.size());
+                }
+#endif
+            }
+          else
+            {
+              TRACEPRINTF(t, 2, "IP Secure: session %d auth FAILED", secure_session_id);
+              auto status = parent->ip_secure.buildSessionStatus(
+                secure_session_id, STATUS_AUTH_FAILED);
+              if (!status.empty() && fd >= 0)
+                sendbuf.write(status.data(), status.size());
+              parent->ip_secure.removeSession(secure_session_id);
+              secure_session_id = 0;
+            }
+          return;
+        }
+
+      // Handle SESSION_STATUS (keepalive/close)
+      if (inner_pkt->service == SESSION_STATUS_SVC_ID)
+        {
+          if (inner.size() >= 7)
+            {
+              uint8_t status = inner[6];
+              if (status == STATUS_CLOSE)
+                {
+                  TRACEPRINTF(t, 2, "IP Secure: client closed session %d", secure_session_id);
+                  auto resp = parent->ip_secure.buildSessionStatus(
+                    secure_session_id, STATUS_CLOSE);
+                  if (!resp.empty() && fd >= 0)
+                    sendbuf.write(resp.data(), resp.size());
+                  parent->ip_secure.removeSession(secure_session_id);
+                  secure_session_id = 0;
+                  stop(false);
+                }
+              else if (status == STATUS_KEEPALIVE)
+                {
+#ifdef HAVE_IPSECURE
+                  auto* session = parent->ip_secure.findSession(secure_session_id);
+                  if (session && session->state != SecureSession::AUTHENTICATED)
+                    {
+                      // Keepalive on unauthenticated session
+                      auto resp = parent->ip_secure.buildSessionStatus(
+                        secure_session_id, STATUS_UNAUTHENTICATED);
+                      if (!resp.empty() && fd >= 0)
+                        sendbuf.write(resp.data(), resp.size());
+                      parent->ip_secure.removeSession(secure_session_id);
+                      secure_session_id = 0;
+                    }
+#endif
+                  // Authenticated keepalive is a no-op (timer already reset)
+                }
+            }
+          return;
+        }
+
+      // Check authentication before forwarding any other service
+#ifdef HAVE_IPSECURE
+      auto* session = parent->ip_secure.findSession(secure_session_id);
+      if (!session || session->state != SecureSession::AUTHENTICATED)
+        {
+          TRACEPRINTF(t, 2, "IP Secure: rejecting service in unauthenticated session");
+          auto resp = parent->ip_secure.buildSessionStatus(
+            secure_session_id, STATUS_UNAUTHENTICATED);
+          if (!resp.empty() && fd >= 0)
+            sendbuf.write(resp.data(), resp.size());
+          parent->ip_secure.removeSession(secure_session_id);
+          secure_session_id = 0;
+          return;
+#endif
+        }
+
+      // Forward the unwrapped inner packet to normal handler
+      handlePacket(*inner_pkt);
+      return;
+    }
+#endif
+
   if (p1.service == CONNECTIONSTATE_REQUEST)
     {
       EIBnet_ConnectionStateRequest r1;
@@ -511,6 +685,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.devicestatus = 0;
       r2.individual_addr = router.addr;
       r2.installid = 0;
+      memcpy(&r2.serial, parent->knx_serial, 6);
       inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
       strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
       // 03_08_02 Core v01.06.02, §7.5.4.3 Table 3
@@ -522,6 +697,60 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.services.push_back(d);
       d.family = SF_TUNNELLING;
       r2.services.push_back(d);
+#ifdef HAVE_IPSECURE
+      if (parent->ip_secure.isEnabled())
+        {
+          d.family = SF_SECURITY;
+          r2.services.push_back(d);
+        }
+#endif
+
+      // Tunnelling Info DIB (type 0x07) — lists available tunnel slots
+      // 03_08_02 Core v01.06.02, §7.5.4.8
+      {
+        Router& rtr = static_cast<Router &>(parent->router);
+        int num_slots = rtr.getClientAddrsLen() > 0 ? rtr.getClientAddrsLen() : 4;
+        eibaddr_t base_addr = rtr.getClientAddrsStart();
+        int tun_dib_len = 4 + num_slots * 4;
+
+        // Secure Service Families DIB (type 0x06) — tells ETS which services require security
+        int sec_dib_len = 0;
+#ifdef HAVE_IPSECURE
+        if (parent->ip_secure.isEnabled())
+          sec_dib_len = 2 + 2 + 2; // header(2) + DevMgmt(2) + Tunnelling(2)
+
+        r2.optional.resize(tun_dib_len + sec_dib_len);
+
+        // Tunnelling Info DIB
+        r2.optional[0] = tun_dib_len;
+        r2.optional[1] = 0x07;
+        r2.optional[2] = (parent->maxAPDULength >> 8) & 0xFF;
+        r2.optional[3] = parent->maxAPDULength & 0xFF;
+        for (int i = 0; i < num_slots; i++)
+          {
+            eibaddr_t slot_addr = base_addr + i;
+            r2.optional[4 + i*4 + 0] = (slot_addr >> 8) & 0xFF;
+            r2.optional[4 + i*4 + 1] = slot_addr & 0xFF;
+            r2.optional[4 + i*4 + 2] = 0xFF;
+            r2.optional[4 + i*4 + 3] = 0xFF;
+          }
+#endif
+
+        // Secure Service Families DIB (type 0x06)
+#ifdef HAVE_IPSECURE
+        if (parent->ip_secure.isEnabled())
+          {
+            int off = tun_dib_len;
+            r2.optional[off + 0] = sec_dib_len;
+            r2.optional[off + 1] = 0x06; // SecureServiceFamilies
+            r2.optional[off + 2] = SF_DEVICE_MANAGEMENT;
+            r2.optional[off + 3] = 0x01; // version 1
+            r2.optional[off + 4] = SF_TUNNELLING;
+            r2.optional[off + 5] = 0x01; // version 1
+          }
+#endif
+      }
+
       send(r2.ToPacket(IPV4_TCP));
       return;
     }
@@ -738,6 +967,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.devicestatus = 0;
       r2.individual_addr = router.addr;
       r2.installid = 0;
+      memcpy(&r2.serial, parent->knx_serial, 6);
       inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
       strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
       // HPAI: route-back for TCP (spec: "only report UDP address", use 0.0.0.0:0)
@@ -751,8 +981,57 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.services.push_back(d);
       d.family = SF_TUNNELLING;
       r2.services.push_back(d);
+#ifdef HAVE_IPSECURE
+      if (parent->ip_secure.isEnabled())
+        {
+          d.family = SF_SECURITY;
+          r2.services.push_back(d);
+        }
+#endif
       EIBNetIPPacket pkt = r2.ToPacket(IPV4_TCP);
       pkt.service = SEARCH_RESPONSE_EXTENDED;
+
+      // Append Tunnelling Info DIB (type 0x07) + Secure Service Families DIB (type 0x06)
+      {
+        int num_slots = router.getClientAddrsLen() > 0 ? router.getClientAddrsLen() : 4;
+        eibaddr_t base_addr = router.getClientAddrsStart();
+        int tun_dib_len = 4 + num_slots * 4;
+#ifdef HAVE_IPSECURE
+        int sec_dib_len = parent->ip_secure.isEnabled() ? 6 : 0; // 2+2+2
+
+        size_t old_size = pkt.data.size();
+        pkt.data.resize(old_size + tun_dib_len + sec_dib_len);
+
+        // Tunnelling Info DIB
+        pkt.data[old_size + 0] = tun_dib_len;
+        pkt.data[old_size + 1] = 0x07;
+        pkt.data[old_size + 2] = (parent->maxAPDULength >> 8) & 0xFF;
+        pkt.data[old_size + 3] = parent->maxAPDULength & 0xFF;
+        for (int i = 0; i < num_slots; i++)
+          {
+            eibaddr_t sa = base_addr + i;
+            pkt.data[old_size + 4 + i*4 + 0] = (sa >> 8) & 0xFF;
+            pkt.data[old_size + 4 + i*4 + 1] = sa & 0xFF;
+            pkt.data[old_size + 4 + i*4 + 2] = 0xFF;
+            pkt.data[old_size + 4 + i*4 + 3] = 0xFF;
+          }
+#endif
+
+        // Secure Service Families DIB (type 0x06)
+#ifdef HAVE_IPSECURE
+        if (parent->ip_secure.isEnabled())
+          {
+            size_t off = old_size + tun_dib_len;
+            pkt.data[off + 0] = 6; // length
+            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
+            pkt.data[off + 3] = 0x01;
+            pkt.data[off + 4] = SF_TUNNELLING;
+            pkt.data[off + 5] = 0x01;
+          }
+#endif
+      }
+
       send(pkt);
       return;
     }
@@ -830,6 +1109,50 @@ TcpTunServer::setup()
   }
   manufacturerCode = cfg->value("manufacturer-code", 0);
   ignore_when_systemd = cfg->value("systemd-ignore", port == 3671);
+
+  // Parse serial-number (12 hex chars = 6 bytes), used for discovery DIBs
+  {
+    std::string sn = cfg->value("serial-number", "");
+    if (sn.size() == 12)
+      for (int i = 0; i < 6; i++)
+        sscanf(sn.c_str() + i*2, "%2hhx", &knx_serial[i]);
+  }
+
+#ifdef HAVE_IPSECURE
+  // KNX IP Secure configuration (03_08_09)
+  //
+  // user-password is mandatory — this is what ETS calls "Commissioning Password".
+  //   It authenticates the client (ETS/visualization) to the server.
+  //   Set for both user 1 (management) and user 2 (tunnelling).
+  //
+  // device-auth is optional — the Device Authentication Code.
+  //   It authenticates the server to the client (prevents MITM attacks).
+  //   The client may skip verification if it doesn't know the code.
+  //   If omitted, IP Secure still works — the client just can't verify
+  //   the server's identity during the ECDH handshake.
+  //
+  // Note: ETS will initiate IP Secure when it sees the Secure Service
+  // Families DIB (0x06) in the DESCRIPTION_RESPONSE or SEARCH_RESPONSE.
+  // No KNX IP Router needs to be configured in the ETS project.
+  // UDP multicast discovery is also not required — ETS can connect
+  // directly via TCP if the address is known.
+  {
+    std::string device_auth = cfg->value("device-auth", "");
+    std::string user_pwd = cfg->value("user-password", "");
+
+    ip_secure.setSerialNumber(knx_serial);
+
+    if (!device_auth.empty())
+      ip_secure.setDeviceAuthPassword(device_auth);
+    if (!user_pwd.empty())
+      {
+        ip_secure.setUserPassword(1, user_pwd); // management (ETS commissioning)
+        ip_secure.setUserPassword(2, user_pwd); // tunnelling (visualizations, etc.)
+      }
+    if (ip_secure.isEnabled())
+      TRACEPRINTF(t, 2, "IP Secure: enabled for TCP tunnel server");
+  }
+#endif
 
   /* Check that we have client addresses. */
   if (!static_cast<Router&>(router).hasClientAddrs())
