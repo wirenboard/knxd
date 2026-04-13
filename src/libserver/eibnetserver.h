@@ -184,6 +184,7 @@ private:
   bool route;
   bool discover;
   bool secure;
+  bool has_tcp_tunnel;
   uint8_t knx_serial[6] = {};
   bool single_port;
   std::string multicastaddr;

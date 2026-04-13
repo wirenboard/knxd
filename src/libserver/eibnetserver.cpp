@@ -42,6 +42,7 @@ EIBnetServer::EIBnetServer (BaseRouter& r, IniSectionPtr& s)
   , tunnel(false)
   , route(false)
   , discover(false)
+  , has_tcp_tunnel(false)
   , Port(-1)
   , sock_mac(-1)
   , router_cfg(s->sub("router",false))
@@ -162,6 +163,31 @@ EIBnetServer::setup()
     if (sn.size() == 12)
       for (int i = 0; i < 6; i++)
         sscanf(sn.c_str() + i*2, "%2hhx", &knx_serial[i]);
+  }
+  // Auto-detect TCP tunnel support (KNXnet/IP v2 per ISO 22510):
+  // scan the connections list for a 'tcptunsrv' server entry.
+  has_tcp_tunnel = false;
+  {
+    Router& rtr = dynamic_cast<Router&>(router);
+    std::string conns = router.ini[rtr.main]->value("connections","");
+    size_t pos = 0;
+    while (pos < conns.size())
+      {
+        size_t comma = conns.find(',', pos);
+        std::string name = conns.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        if (name.size() && name != cfg->name)
+          {
+            std::string stype = router.ini[name]->value("server","");
+            if (stype == "tcptunsrv" || name == "tcptunsrv")
+              {
+                has_tcp_tunnel = true;
+                break;
+              }
+          }
+        if (comma == std::string::npos)
+          break;
+        pos = comma + 1;
+      }
   }
   single_port = !cfg->value("multi-port",false);
   multicastaddr = cfg->value("multicast-address","224.0.23.12");
@@ -607,8 +633,9 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      // 03_08_02 §7.5.4.3: version 2 = KNXnet/IP v2 with TCP support (ISO 22510)
-      d.version = secure ? 2 : 1;
+      // 03_08_02 §7.5.4.3: version 2 = KNXnet/IP v2 with TCP support (ISO 22510).
+      // Advertise v2 only when a TCP tunnel server (tcptunsrv) is also configured.
+      d.version = has_tcp_tunnel ? 2 : 1;
       d.family = SF_CORE;
       r2.services.push_back (d);
       d.family = SF_DEVICE_MANAGEMENT;
