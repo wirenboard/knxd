@@ -311,17 +311,17 @@ TcpTunConn::send(const EIBNetIPPacket& p)
 // Services that must not be accepted in plain TCP on a secure-only server.
 // SESSION_REQUEST, SECURE_WRAPPER, SEARCH_REQUEST*, DESCRIPTION_REQUEST remain
 // allowed in plain because they are part of (or equivalent to) the handshake.
-static bool isSecureOnlyService(uint16_t svc)
+// Services allowed in plain TCP even on a secure-only server.
+// Everything else must arrive inside a SECURE_WRAPPER.
+static bool isPlainAllowedService(uint16_t svc)
 {
   switch (svc)
     {
-    case CONNECTION_REQUEST:
-    case CONNECTIONSTATE_REQUEST:
-    case DISCONNECT_REQUEST:
-    case TUNNEL_REQUEST:
-    case TUNNEL_FEATURE_GET:
-    case TUNNEL_FEATURE_SET:
-    case DEVICE_CONFIGURATION_REQUEST:
+    case SESSION_REQUEST_SVC:
+    case SECURE_WRAPPER_SVC:
+    case SEARCH_REQUEST:
+    case SEARCH_REQUEST_EXTENDED:
+    case DESCRIPTION_REQUEST:
       return true;
     default:
       return false;
@@ -416,7 +416,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
         }
 
       // Handle SESSION_STATUS (keepalive/close)
-      if (inner_pkt->service == SESSION_STATUS_SVC_ID)
+      if (inner_pkt->service == SESSION_STATUS_SVC)
         {
           if (inner.size() >= 7)
             {
@@ -473,7 +473,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
   // Plain TCP frame on a secure-only server: drop everything that isn't a
   // handshake-allowed service and tear down the connection. 03_08_09 §4.2
   // says the server must not respond to such frames.
-  if (parent->ip_secure.isEnabled() && isSecureOnlyService(p1.service))
+  if (parent->ip_secure.isEnabled() && !isPlainAllowedService(p1.service))
     {
       TRACEPRINTF(t, 2, "IP Secure: rejecting plain service 0x%04x on secure-only server",
                   p1.service);
@@ -798,7 +798,7 @@ TcpTunConn::handleInnerPacket(const EIBNetIPPacket &p1)
 
         // Tunnelling Info DIB
         r2.optional[0] = tun_dib_len;
-        r2.optional[1] = 0x07;
+        r2.optional[1] = TUNNELLING_INFO;
         r2.optional[2] = (parent->maxAPDULength >> 8) & 0xFF;
         r2.optional[3] = parent->maxAPDULength & 0xFF;
         for (int i = 0; i < num_slots; i++)
@@ -816,7 +816,7 @@ TcpTunConn::handleInnerPacket(const EIBNetIPPacket &p1)
           {
             int off = tun_dib_len;
             r2.optional[off + 0] = sec_dib_len;
-            r2.optional[off + 1] = 0x06; // SecureServiceFamilies
+            r2.optional[off + 1] = SECURE_SVC_FAMILIES;
             r2.optional[off + 2] = SF_DEVICE_MANAGEMENT;
             r2.optional[off + 3] = 0x01; // version 1
             r2.optional[off + 4] = SF_TUNNELLING;
@@ -1085,7 +1085,7 @@ TcpTunConn::handleInnerPacket(const EIBNetIPPacket &p1)
 
         // Tunnelling Info DIB
         pkt.data[old_size + 0] = tun_dib_len;
-        pkt.data[old_size + 1] = 0x07;
+        pkt.data[old_size + 1] = TUNNELLING_INFO;
         pkt.data[old_size + 2] = (parent->maxAPDULength >> 8) & 0xFF;
         pkt.data[old_size + 3] = parent->maxAPDULength & 0xFF;
         for (int i = 0; i < num_slots; i++)
@@ -1103,7 +1103,7 @@ TcpTunConn::handleInnerPacket(const EIBNetIPPacket &p1)
           {
             size_t off = old_size + tun_dib_len;
             pkt.data[off + 0] = 6; // length
-            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 1] = SECURE_SVC_FAMILIES;
             pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
             pkt.data[off + 3] = 0x01;
             pkt.data[off + 4] = SF_TUNNELLING;

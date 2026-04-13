@@ -17,9 +17,8 @@
 #include <openssl/sha.h>
 #include <cstring>
 
-// KNXnet/IP header helpers
-#define KNXIP_HEADER_LEN 6
-#define KNXIP_VERSION 0x10
+// Use header constants from eibnetip.h
+// HEADER_SIZE_10 = 0x06, KNXNETIP_VERSION_10 = 0x10
 
 static void putU16BE(uint8_t* p, uint16_t v) {
   p[0] = (v >> 8) & 0xFF;
@@ -45,8 +44,8 @@ static void putU48BE(uint8_t* p, uint64_t v) {
 }
 
 static void buildKNXIPHeader(uint8_t* buf, uint16_t service, uint16_t total_len) {
-  buf[0] = KNXIP_HEADER_LEN;
-  buf[1] = KNXIP_VERSION;
+  buf[0] = HEADER_SIZE_10;
+  buf[1] = KNXNETIP_VERSION_10;
   putU16BE(buf + 2, service);
   putU16BE(buf + 4, total_len);
 }
@@ -239,7 +238,7 @@ bool IPSecure::ctrEncrypt(const uint8_t key[IPSEC_KEY_SIZE],
 
 std::vector<uint8_t> IPSecure::handleSessionRequest(const uint8_t* data, size_t len) {
   if (len != 46) return {};
-  if (data[0] != KNXIP_HEADER_LEN || data[1] != KNXIP_VERSION) return {};
+  if (data[0] != HEADER_SIZE_10 || data[1] != KNXNETIP_VERSION_10) return {};
   if (getU16BE(data + 2) != SESSION_REQUEST_SVC) return {};
 
   const uint8_t* client_pub = data + 14;
@@ -389,7 +388,7 @@ std::vector<uint8_t> IPSecure::unwrapSecure(const uint8_t* data, size_t len,
   if (session->recv_seq != UINT64_MAX && seq <= session->recv_seq)
     return {};
 
-  size_t encrypted_offset = KNXIP_HEADER_LEN + 2 + 6 + 6 + 2; // = 22
+  size_t encrypted_offset = HEADER_SIZE_10 + 2 + 6 + 6 + 2; // = 22
   size_t encrypted_len = len - encrypted_offset;
   if (encrypted_len < IPSEC_MAC_SIZE) return {};
   size_t inner_len = encrypted_len - IPSEC_MAC_SIZE;
@@ -439,7 +438,7 @@ std::vector<uint8_t> IPSecure::wrapSecure(uint16_t session_id,
 
   uint64_t seq = session->send_seq++;
 
-  size_t total = KNXIP_HEADER_LEN + 2 + 6 + 6 + 2 + frame_len + IPSEC_MAC_SIZE;
+  size_t total = HEADER_SIZE_10 + 2 + 6 + 6 + 2 + frame_len + IPSEC_MAC_SIZE;
   std::vector<uint8_t> packet(total);
   buildKNXIPHeader(packet.data(), SECURE_WRAPPER_SVC, total);
   putU16BE(packet.data() + 6, session_id);
@@ -485,7 +484,7 @@ std::vector<uint8_t> IPSecure::wrapSecure(uint16_t session_id,
 
 std::vector<uint8_t> IPSecure::buildSessionStatus(uint16_t session_id, uint8_t status) {
   uint8_t inner[8];
-  buildKNXIPHeader(inner, SESSION_STATUS_SVC_ID, 8);
+  buildKNXIPHeader(inner, SESSION_STATUS_SVC, 8);
   inner[6] = status;
   inner[7] = 0x00;
   return wrapSecure(session_id, inner, 8);

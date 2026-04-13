@@ -19,21 +19,21 @@
 #include <map>
 #include <string>
 
-// Session status codes
-#define STATUS_AUTH_SUCCESS     0x00
-#define STATUS_AUTH_FAILED      0x01
-#define STATUS_UNAUTHENTICATED  0x02
-#define STATUS_TIMEOUT          0x03
-#define STATUS_KEEPALIVE        0x04
-#define STATUS_CLOSE            0x05
+// Session status codes (03_08_09 §5.2.7.5)
+constexpr uint8_t STATUS_AUTH_SUCCESS     = 0x00;
+constexpr uint8_t STATUS_AUTH_FAILED      = 0x01;
+constexpr uint8_t STATUS_UNAUTHENTICATED  = 0x02;
+constexpr uint8_t STATUS_TIMEOUT          = 0x03;
+constexpr uint8_t STATUS_KEEPALIVE        = 0x04;
+constexpr uint8_t STATUS_CLOSE            = 0x05;
 
 // Crypto constants
-#define IPSEC_MAC_SIZE    16
-#define IPSEC_KEY_SIZE    16
-#define IPSEC_ECDH_SIZE   32
+constexpr size_t IPSEC_MAC_SIZE    = 16;
+constexpr size_t IPSEC_KEY_SIZE    = 16;
+constexpr size_t IPSEC_ECDH_SIZE   = 32;
 
 // Max concurrent unauthenticated + authenticated sessions
-#define IPSEC_MAX_SESSIONS 16
+constexpr int IPSEC_MAX_SESSIONS = 16;
 
 /** Per-session state for KNX IP Secure unicast */
 struct SecureSession {

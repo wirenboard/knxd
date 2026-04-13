@@ -664,7 +664,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
             size_t off = pkt.data.size();
             pkt.data.resize(off + 6);
             pkt.data[off + 0] = 6;
-            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 1] = SECURE_SVC_FAMILIES;
             pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
             pkt.data[off + 3] = 0x01;
             pkt.data[off + 4] = SF_TUNNELLING;
@@ -707,7 +707,9 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       }
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = secure ? 2 : 1;
+      // 03_08_02 §7.5.4.3: version 2 = KNXnet/IP v2 with TCP support (ISO 22510).
+      // Advertise v2 only when a TCP tunnel server (tcptunsrv) is also configured.
+      d.version = has_tcp_tunnel ? 2 : 1;
       d.family = SF_CORE;
       r2.services.push_back (d);
       d.family = SF_DEVICE_MANAGEMENT;
@@ -739,7 +741,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
           num_slots = 62;
         eibaddr_t base_addr = rtr.getClientAddrsStart();
         int tun_dib_len = 4 + num_slots * 4;
-        uint16_t max_apdu = 254;
+        uint16_t max_apdu = maxAPDULength;
 
         size_t old_size = pkt.data.size();
         int sec_dib_len = secure ? 6 : 0;
@@ -747,7 +749,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
 
         // TunnelingInfo DIB
         pkt.data[old_size + 0] = tun_dib_len;
-        pkt.data[old_size + 1] = 0x07; // TUNNELING_INFO
+        pkt.data[old_size + 1] = TUNNELLING_INFO;
         pkt.data[old_size + 2] = (max_apdu >> 8) & 0xFF;
         pkt.data[old_size + 3] = max_apdu & 0xFF;
         for (int i = 0; i < num_slots; i++)
@@ -756,7 +758,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
             pkt.data[old_size + 4 + i*4 + 0] = (slot_addr >> 8) & 0xFF;
             pkt.data[old_size + 4 + i*4 + 1] = slot_addr & 0xFF;
             pkt.data[old_size + 4 + i*4 + 2] = 0xFF;
-            pkt.data[old_size + 4 + i*4 + 3] = 0x07; // usable=1, authorized=1, free=1
+            pkt.data[old_size + 4 + i*4 + 3] = 0xFF;
           }
 
         // Secure Service Families DIB (type 0x06)
@@ -803,7 +805,9 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       }
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = secure ? 2 : 1;
+      // 03_08_02 §7.5.4.3: version 2 = KNXnet/IP v2 with TCP support (ISO 22510).
+      // Advertise v2 only when a TCP tunnel server (tcptunsrv) is also configured.
+      d.version = has_tcp_tunnel ? 2 : 1;
       d.family = SF_CORE;
       if (discover)
         r2.services.push_back (d);
@@ -840,7 +844,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
               {
                 eibaddr_t base_addr = rtr.getClientAddrsStart();
                 r2.optional[0] = tun_dib_len;
-                r2.optional[1] = 0x07; // TUNNELLING_INFO
+                r2.optional[1] = TUNNELLING_INFO;
                 r2.optional[2] = (maxAPDULength >> 8) & 0xFF;
                 r2.optional[3] = maxAPDULength & 0xFF;
                 for (int i = 0; i < num_slots; i++)
@@ -856,7 +860,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
               {
                 int off = tun_dib_len;
                 r2.optional[off + 0] = 6;
-                r2.optional[off + 1] = 0x06; // SecureServiceFamilies
+                r2.optional[off + 1] = SECURE_SVC_FAMILIES;
                 r2.optional[off + 2] = SF_DEVICE_MANAGEMENT;
                 r2.optional[off + 3] = 0x01;
                 r2.optional[off + 4] = SF_TUNNELLING;
