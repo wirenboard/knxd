@@ -66,6 +66,8 @@ public:
 
   // Configuration
   void setDeviceAuthPassword(const std::string& password);
+  // Set device authentication code directly (16 raw bytes, e.g. FDSK from certificate)
+  void setDeviceAuthKey(const uint8_t key[IPSEC_KEY_SIZE]);
   void setUserPassword(uint8_t userId, const std::string& password);
   void setSerialNumber(const uint8_t sno[6]);
 

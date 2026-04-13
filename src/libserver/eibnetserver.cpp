@@ -157,6 +157,12 @@ EIBnetServer::setup()
   tunnel = tunnel_cfg->name.size() > 0;
   discover = cfg->value("discover",false);
   secure = cfg->value("secure",false);
+  {
+    std::string sn = cfg->value("serial-number", "");
+    if (sn.size() == 12)
+      for (int i = 0; i < 6; i++)
+        sscanf(sn.c_str() + i*2, "%2hhx", &knx_serial[i]);
+  }
   single_port = !cfg->value("multi-port",false);
   multicastaddr = cfg->value("multicast-address","224.0.23.12");
   port = cfg->value("port",3671);
@@ -502,7 +508,8 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
   unsigned char mac_address[IFHWADDRLEN]= {0,0,0,0,0,0};
 
   if (sock_mac != -1 && discover &&
-      (p1->service == DESCRIPTION_REQUEST || p1->service == SEARCH_REQUEST))
+      (p1->service == DESCRIPTION_REQUEST || p1->service == SEARCH_REQUEST ||
+       p1->service == SEARCH_REQUEST_EXTENDED))
     {
       ifc.ifc_len = sizeof(buf);
       ifc.ifc_buf = buf;
@@ -583,32 +590,42 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       if (!discover)
         goto out;
 
-      r2.KNXmedium = 2;
+      r2.KNXmedium = M_TP1;
       r2.devicestatus = 0;
       r2.individual_addr = dynamic_cast<Router *>(&router)->addr;
       r2.installid = 0;
       r2.multicastaddr = mcast->maddr.sin_addr;
       // Serial must be deterministic and should consider multiple instances on a system.
-      std::copy(mac_address, mac_address + sizeof(mac_address), r2.serial.begin());
-      r2.serial[0] ^= (Port >> 8) & 0xff;
-      r2.serial[1] ^= Port & 0xff;
+      if (memcmp(knx_serial, "\0\0\0\0\0\0", 6) != 0)
+        memcpy(&r2.serial, knx_serial, 6);
+      else {
+        std::copy(mac_address, mac_address + sizeof(mac_address), r2.serial.begin());
+        r2.serial[0] ^= (Port >> 8) & 0xff;
+        r2.serial[1] ^= Port & 0xff;
+      }
       //FIXME: Hostname, MAC-addr
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      // version 2 = KNXnet/IP v2 with TCP support (ISO 22510)
+      // 03_08_02 §7.5.4.3: version 2 = KNXnet/IP v2 with TCP support (ISO 22510)
       d.version = secure ? 2 : 1;
       d.family = SF_CORE;
+      r2.services.push_back (d);
+      d.family = SF_DEVICE_MANAGEMENT;
       r2.services.push_back (d);
       d.family = SF_TUNNELLING;
       if (tunnel)
         r2.services.push_back (d);
       d.family = SF_ROUTING;
-      if (route)
+      if (route && !secure) // secure routing not implemented
         r2.services.push_back (d);
-      d.family = SF_SECURITY;
       if (secure)
-        r2.services.push_back (d);
+        {
+          // 03_08_09 §5.1.3.6: Security service family is version 1
+          d.family = SF_SECURITY;
+          d.version = 1;
+          r2.services.push_back (d);
+        }
       if (!GetSourceAddress (t, &r1.caddr, &r2.caddr))
         goto out;
       r2.caddr.sin_port = Port;
@@ -621,6 +638,106 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
             pkt.data.resize(off + 6);
             pkt.data[off + 0] = 6;
             pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
+            pkt.data[off + 3] = 0x01;
+            pkt.data[off + 4] = SF_TUNNELLING;
+            pkt.data[off + 5] = 0x01;
+          }
+        isock->Send (pkt, r1.caddr);
+      }
+      goto out;
+    }
+
+  if (p1->service == SEARCH_REQUEST_EXTENDED)
+    {
+      // Respond with SEARCH_RESPONSE_EXTENDED — same device info as SEARCH_RESPONSE
+      EIBnet_SearchRequest r1;
+      EIBnet_SearchResponse r2;
+      DIB_service_Entry d;
+      if (p1->data.size() < 8)
+        {
+          t->TracePacket (2, "unparseable SEARCH_REQUEST_EXTENDED", p1->data);
+          goto out;
+        }
+      // Parse HPAI from the request
+      if (EIBnettoIP (CArray (p1->data.data(), 8), &r1.caddr, &p1->src, r1.nat, p1->protocol))
+        goto out;
+      TRACEPRINTF (t, 8, "SEARCH_REQ_EXT");
+      if (!discover)
+        goto out;
+
+      r2.KNXmedium = M_TP1;
+      r2.devicestatus = 0;
+      r2.individual_addr = dynamic_cast<Router *>(&router)->addr;
+      r2.installid = 0;
+      r2.multicastaddr = mcast->maddr.sin_addr;
+      if (memcmp(knx_serial, "\0\0\0\0\0\0", 6) != 0)
+        memcpy(&r2.serial, knx_serial, 6);
+      else {
+        std::copy(mac_address, mac_address + sizeof(mac_address), r2.serial.begin());
+        r2.serial[0] ^= (Port >> 8) & 0xff;
+        r2.serial[1] ^= Port & 0xff;
+      }
+      memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
+      strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
+      d.version = secure ? 2 : 1;
+      d.family = SF_CORE;
+      r2.services.push_back (d);
+      d.family = SF_DEVICE_MANAGEMENT;
+      r2.services.push_back (d);
+      d.family = SF_TUNNELLING;
+      if (tunnel)
+        r2.services.push_back (d);
+      d.family = SF_ROUTING;
+      if (route && !secure)
+        r2.services.push_back (d);
+      if (secure)
+        {
+          // 03_08_09 §5.1.3.6: Security service family is version 1
+          d.family = SF_SECURITY;
+          d.version = 1;
+          r2.services.push_back (d);
+        }
+      if (!GetSourceAddress (t, &r1.caddr, &r2.caddr))
+        goto out;
+      r2.caddr.sin_port = Port;
+      {
+        EIBNetIPPacket pkt = r2.ToPacket ();
+        pkt.service = SEARCH_RESPONSE_EXTENDED;
+
+        // Append Tunnelling Info DIB (type 0x07) — required by xknx/ETS to find free slots
+        Router& rtr = *dynamic_cast<Router *>(&router);
+        int num_slots = rtr.getClientAddrsLen() > 0 ? rtr.getClientAddrsLen() : 4;
+        if (num_slots > 62)
+          num_slots = 62;
+        eibaddr_t base_addr = rtr.getClientAddrsStart();
+        int tun_dib_len = 4 + num_slots * 4;
+        uint16_t max_apdu = 254;
+
+        size_t old_size = pkt.data.size();
+        int sec_dib_len = secure ? 6 : 0;
+        pkt.data.resize(old_size + tun_dib_len + sec_dib_len);
+
+        // TunnelingInfo DIB
+        pkt.data[old_size + 0] = tun_dib_len;
+        pkt.data[old_size + 1] = 0x07; // TUNNELING_INFO
+        pkt.data[old_size + 2] = (max_apdu >> 8) & 0xFF;
+        pkt.data[old_size + 3] = max_apdu & 0xFF;
+        for (int i = 0; i < num_slots; i++)
+          {
+            eibaddr_t slot_addr = base_addr + i;
+            pkt.data[old_size + 4 + i*4 + 0] = (slot_addr >> 8) & 0xFF;
+            pkt.data[old_size + 4 + i*4 + 1] = slot_addr & 0xFF;
+            pkt.data[old_size + 4 + i*4 + 2] = 0xFF;
+            pkt.data[old_size + 4 + i*4 + 3] = 0x07; // usable=1, authorized=1, free=1
+          }
+
+        // Secure Service Families DIB (type 0x06)
+        if (secure)
+          {
+            size_t off = old_size + tun_dib_len;
+            pkt.data[off + 0] = 6;
+            pkt.data[off + 1] = 0x06;
             pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
             pkt.data[off + 3] = 0x01;
             pkt.data[off + 4] = SF_TUNNELLING;
@@ -644,13 +761,20 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       if (!discover)
         goto out;
       TRACEPRINTF (t, 8, "DESCRIBE");
-      r2.KNXmedium = 2;
+      r2.KNXmedium = M_TP1;
       r2.devicestatus = 0;
       r2.individual_addr = dynamic_cast<Router *>(&router)->addr;
       r2.installid = 0;
       r2.multicastaddr = mcast->maddr.sin_addr;
+      // Fix C: populate serial (was left as all-zeros)
+      if (memcmp(knx_serial, "\0\0\0\0\0\0", 6) != 0)
+        memcpy(&r2.serial, knx_serial, 6);
+      else {
+        std::copy(mac_address, mac_address + sizeof(mac_address), r2.serial.begin());
+        r2.serial[0] ^= (Port >> 8) & 0xff;
+        r2.serial[1] ^= Port & 0xff;
+      }
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
-      //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
       d.version = secure ? 2 : 1;
       d.family = SF_CORE;
@@ -662,11 +786,57 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       if (tunnel)
         r2.services.push_back (d);
       d.family = SF_ROUTING;
-      if (route)
+      if (route && !secure) // secure routing not implemented
         r2.services.push_back (d);
-      d.family = SF_SECURITY;
       if (secure)
-        r2.services.push_back (d);
+        {
+          // 03_08_09 §5.1.3.6: Security service family is version 1
+          d.family = SF_SECURITY;
+          d.version = 1;
+          r2.services.push_back (d);
+        }
+
+      // Fix D+E: append Tunnelling Info DIB (0x07) and Secure Svc Families DIB (0x06)
+      // to DESCRIPTION_RESPONSE per 03_08_02 §8.6.3.8 and 03_08_09 §5.1.3.6.
+      // (Not added to regular SEARCH_RESPONSE — calimero rejects type 0x07 there.)
+      {
+        Router& rtr = *dynamic_cast<Router *>(&router);
+        int num_slots = tunnel ? (rtr.getClientAddrsLen() > 0 ? rtr.getClientAddrsLen() : 4) : 0;
+        if (num_slots > 62)
+          num_slots = 62;
+        int tun_dib_len = num_slots > 0 ? (4 + num_slots * 4) : 0;
+        int sec_dib_len = secure ? 6 : 0; // 2 + 2×(family+version)
+        if (tun_dib_len + sec_dib_len > 0)
+          {
+            r2.optional.resize(tun_dib_len + sec_dib_len);
+            if (tun_dib_len > 0)
+              {
+                eibaddr_t base_addr = rtr.getClientAddrsStart();
+                r2.optional[0] = tun_dib_len;
+                r2.optional[1] = 0x07; // TUNNELLING_INFO
+                r2.optional[2] = (maxAPDULength >> 8) & 0xFF;
+                r2.optional[3] = maxAPDULength & 0xFF;
+                for (int i = 0; i < num_slots; i++)
+                  {
+                    eibaddr_t slot_addr = base_addr + i;
+                    r2.optional[4 + i*4 + 0] = (slot_addr >> 8) & 0xFF;
+                    r2.optional[4 + i*4 + 1] = slot_addr & 0xFF;
+                    r2.optional[4 + i*4 + 2] = 0xFF;
+                    r2.optional[4 + i*4 + 3] = 0xFF;
+                  }
+              }
+            if (sec_dib_len > 0)
+              {
+                int off = tun_dib_len;
+                r2.optional[off + 0] = 6;
+                r2.optional[off + 1] = 0x06; // SecureServiceFamilies
+                r2.optional[off + 2] = SF_DEVICE_MANAGEMENT;
+                r2.optional[off + 3] = 0x01;
+                r2.optional[off + 4] = SF_TUNNELLING;
+                r2.optional[off + 5] = 0x01;
+              }
+          }
+      }
       isock->Send (r2.ToPacket (), r1.caddr);
       goto out;
     }

@@ -79,6 +79,11 @@ public:
   uint16_t secure_session_id = 0;
 #endif
 
+private:
+  // Dispatches a KNXnet/IP service that has already passed the IP Secure gate:
+  // either unwrapped from a SECURE_WRAPPER, or accepted on a plain server.
+  void handleInnerPacket(const EIBNetIPPacket &p1);
+
 protected:
   uint32_t connectionID;
 
@@ -117,6 +122,8 @@ protected:
 
   /** KNX serial number (6 bytes, for discovery and IP Secure) */
   uint8_t knx_serial[6] = {};
+  /** Cached MAC address of first non-loopback interface */
+  uint8_t local_mac[6] = {};
 
 #ifdef HAVE_IPSECURE
   /** KNX IP Secure */

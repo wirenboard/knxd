@@ -108,6 +108,14 @@ void IPSecure::setDeviceAuthPassword(const std::string& password) {
   enabled = true;
 }
 
+void IPSecure::setDeviceAuthKey(const uint8_t key[IPSEC_KEY_SIZE]) {
+  // Use the 16-byte key directly as the device authentication code.
+  // Per 03_08_09 §2.3.1.3.3: in ex-factory state, Device Authentication Code = FDSK
+  // (the raw 16 bytes from the certificate, NOT PBKDF2'd from a password).
+  memcpy(device_auth_key, key, IPSEC_KEY_SIZE);
+  enabled = true;
+}
+
 void IPSecure::setUserPassword(uint8_t userId, const std::string& password) {
   std::vector<uint8_t> hash(IPSEC_KEY_SIZE);
   deriveUserPwdHash(password, hash.data());
