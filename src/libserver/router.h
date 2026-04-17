@@ -157,7 +157,7 @@ public:
 
   /** Returns the minimum maxFrameLength across all connected bus drivers.
    *  Skips drivers that return 0 (unknown/not a bus driver).
-   *  Returns 23 (standard KNX frame) if no driver reports a value.
+   *  Returns 263 if no driver reports a value (NCN5120 default).
    */
   unsigned int maxFrameLength() const;
 
