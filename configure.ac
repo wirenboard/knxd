@@ -317,6 +317,10 @@ AC_CHECK_LIB([ev], [ev_run],,[AC_MSG_ERROR([libev not found])])
 EV_LIBS="-lev"
 AC_SUBST([EV_LIBS])
 
+AC_CHECK_LIB([crypto], [EVP_EncryptInit_ex],,[AC_MSG_ERROR([libcrypto (OpenSSL) not found])])
+CRYPTO_LIBS="-lcrypto"
+AC_SUBST([CRYPTO_LIBS])
+
 AM_CONDITIONAL(HAVE_SOURCE_INFO, test x$have_source_info = xyes )
 
 AC_CHECK_PROGS(INDENT, indent, no)
