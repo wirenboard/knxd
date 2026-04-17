@@ -1219,7 +1219,7 @@ unsigned int Router::maxFrameLength() const
         result = len;
     }
   }
-  return result > 0 ? result : 23; // conservative: standard KNX frame
+  return result > 0 ? result : 263;
 }
 
 void
