@@ -519,9 +519,11 @@ TPUARTwrap::recv_Data(CArray &c)
           switch(state)
             {
             case T_wait_keepalive:
+              TRACEPRINTF (t, 8, "State indication in wait_keepalive, going to wait");
               setstate(T_wait);
               break;
             case T_in_reset:
+              TRACEPRINTF (t, 8, "State indication in reset, staying");
               // setstate(T_in_reset); // do not immediately retry
               break;
             case T_in_setaddr:
@@ -530,9 +532,11 @@ TPUARTwrap::recv_Data(CArray &c)
               //     ERRORPRINTF (t, E_ERROR | 62, "TPUART detected. Hardware ACK not supported.");
               //     my_addr = 0;
               //   }
+              TRACEPRINTF (t, 8, "State indication in setaddr, going to getstate");
               setstate(T_in_getstate);
               break;
             case T_in_getstate:
+              TRACEPRINTF (t, 8, "State indication in getstate, going online");
               setstate(T_is_online);
               break;
 
