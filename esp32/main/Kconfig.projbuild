@@ -1,0 +1,52 @@
+menu "KNX IP Secure Gateway"
+
+config KNX_WIFI_SSID
+    string "WiFi SSID"
+    default "knx-network"
+
+config KNX_WIFI_PASSWORD
+    string "WiFi Password"
+    default "knx-password"
+
+config KNX_DEVICE_AUTH_PASSWORD
+    string "Device Authentication Password"
+    default "trustme"
+    help
+        Password for KNX IP Secure device authentication.
+        ETS sends this during the secure session handshake.
+
+config KNX_USER_PASSWORD
+    string "User Password"
+    default "secret"
+    help
+        Password for KNX IP Secure user authentication.
+        Enter this in ETS when prompted for the Commissioning Password.
+
+config KNX_INDIVIDUAL_ADDRESS
+    hex "KNX Individual Address"
+    default 0x1101
+    help
+        Individual address of this gateway (e.g. 0x1101 = 1.1.1)
+
+config KNX_UART_NUM
+    int "TPUART UART number"
+    default 1
+    range 0 2
+
+config KNX_UART_TX_PIN
+    int "TPUART TX GPIO pin"
+    default 17
+
+config KNX_UART_RX_PIN
+    int "TPUART RX GPIO pin"
+    default 16
+
+config KNX_UART_BAUD
+    int "TPUART baud rate"
+    default 19200
+
+config KNX_TCP_PORT
+    int "KNXnet/IP TCP port"
+    default 3671
+
+endmenu

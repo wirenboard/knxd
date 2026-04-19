@@ -26,6 +26,7 @@
 
 #ifndef ROUTER_H
 #define ROUTER_H
+#include "knxd_queue.h"
 
 #include <unordered_map>
 

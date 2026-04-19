@@ -23,14 +23,18 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <netinet/in.h>
+#include <unistd.h>
+#ifndef ESP_PLATFORM
 #include <net/if.h>
 #include <net/if_arp.h>
-#include <netinet/in.h>
 #include <sys/ioctl.h>
-#include <unistd.h>
 #ifndef SIOCGIFHWADDR
 #include <sys/sysctl.h>
 #include <net/if_dl.h>
+#endif
+#else
+#include <lwip/sockets.h>
 #endif
 
 #include "emi.h"
@@ -519,19 +523,29 @@ ConnState::~ConnState()
 
 void ConnState::reset_timer()
 {
-  timeout.set(parent->keepalive, 0);
+  // Must stop+start: set() overwrites absolute timestamp with relative,
+  // causing immediate timeout fire in our select()-based ev_loop.
+  timeout.stop();
+  timeout.start(parent->keepalive, 0);
 }
 
 void
 EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
 {
   /* Get MAC Address */
-  /* TODO: cache all of this, and ask at most once per seoncd */
-
+#ifndef ESP_PLATFORM
   struct ifreq ifr;
   struct ifconf ifc;
   char buf[1024];
-  unsigned char mac_address[IFHWADDRLEN]= {0,0,0,0,0,0};
+#endif
+  unsigned char mac_address[6]= {0,0,0,0,0,0};
+
+#ifdef ESP_PLATFORM
+  {
+    extern uint8_t g_knx_mac[6];
+    memcpy(mac_address, g_knx_mac, 6);
+  }
+#else
 
   if (sock_mac != -1 && discover &&
       (p1->service == DESCRIPTION_REQUEST || p1->service == SEARCH_REQUEST ||
@@ -600,6 +614,7 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
             }
         }
     }
+#endif /* !ESP_PLATFORM */
   /* End MAC Address */
 
   if (p1->service == SEARCH_REQUEST)

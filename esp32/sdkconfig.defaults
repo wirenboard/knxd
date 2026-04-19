@@ -1,0 +1,28 @@
+# KNX/IP Secure requires these crypto features
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=y
+CONFIG_MBEDTLS_ECDH_C=y
+CONFIG_MBEDTLS_ECP_C=y
+CONFIG_MBEDTLS_SHA256_C=y
+CONFIG_MBEDTLS_AES_C=y
+CONFIG_MBEDTLS_PKCS5_C=y
+CONFIG_MBEDTLS_CTR_DRBG_C=y
+
+# Increase default task stack (knxd C++ uses heap, but still)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# UART for TPUART
+CONFIG_UART_ISR_IN_IRAM=y
+
+# WiFi
+CONFIG_ESP_WIFI_SSID="knx-network"
+CONFIG_ESP_WIFI_PASSWORD="knx-password"
+
+# lwIP: enable select() for libev
+CONFIG_LWIP_SO_RCVBUF=y
+
+# C++ exceptions (required by libev++)
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+
+# VFS: enable UART as file descriptors (for libev select())
+CONFIG_VFS_SUPPORT_IO=y
+CONFIG_VFS_SUPPORT_SELECT=y

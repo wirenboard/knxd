@@ -52,7 +52,7 @@ GetHostIP (TracePtr tr, struct sockaddr_in *sock, const std::string& name)
   if (!h)
     {
       if (tr)
-        ERRORPRINTF (tr, E_ERROR | 50, "Resolving %s failed: %s", name, hstrerror(h_errno));
+        ERRORPRINTF (tr, E_ERROR | 50, "Resolving %s failed: %s", name, strerror(errno));
       return false;
     }
 #ifdef HAVE_SOCKADDR_IN_LEN
@@ -224,6 +224,35 @@ GetSourceAddress (TracePtr tr, const struct sockaddr_in *dest, struct sockaddr_i
 err_out:
   close (s);
   return 0;
+}
+#endif
+
+#if !defined(HAVE_LINUX_NETLINK) && !defined(HAVE_WINDOWS_IPHELPER) && !defined(HAVE_BSD_SOURCEINFO)
+/* Fallback: use connect()+getsockname() to determine source address.
+ * Works on any platform with BSD sockets (including ESP32 lwIP). */
+bool
+GetSourceAddress (TracePtr tr, const struct sockaddr_in *dest, struct sockaddr_in *src)
+{
+  int s = socket(AF_INET, SOCK_DGRAM, 0);
+  if (s < 0) return false;
+
+  struct sockaddr_in d = *dest;
+  if (d.sin_port == 0) d.sin_port = htons(3671);
+
+  if (connect(s, (struct sockaddr*)&d, sizeof(d)) < 0) {
+    close(s);
+    return false;
+  }
+
+  socklen_t len = sizeof(*src);
+  memset(src, 0, sizeof(*src));
+  if (getsockname(s, (struct sockaddr*)src, &len) < 0) {
+    close(s);
+    return false;
+  }
+
+  close(s);
+  return true;
 }
 #endif
 

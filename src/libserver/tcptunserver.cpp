@@ -31,7 +31,9 @@
 #ifdef __linux__
 #include <netpacket/packet.h>
 #endif
+#ifndef ESP_PLATFORM
 #include <ifaddrs.h>
+#endif
 
 // Get MAC address of first non-loopback ethernet interface
 static void getLocalMAC(uint8_t mac[6])
@@ -112,17 +114,39 @@ TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
 TcpTunConn::~TcpTunConn()
 {
   TRACEPRINTF (t, 8, "Closing TcpTunConn");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] ~TcpTunConn fd=%d secure_sid=%d channels=%zu\n",
+         fd, secure_session_id, channels.size());
+#endif
+  /* Explicitly clear shared_ptrs before implicit member destruction.
+   * The shared_ptr destructor chain (Trace → IniSection, TunChannel →
+   * LinkConnectClient) references objects that must be released while
+   * the Router and IniData are still alive, not during the implicit
+   * member destruction which can race with async cleanup. */
+  channels.clear();
+  t.reset();
+  if (fd >= 0) { close(fd); fd = -1; }
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] ~TcpTunConn done\n");
+#endif
 }
 
 void TcpTunConn::reset_timer()
 {
-  timeout.set(parent->keepalive, 0);
+  // Must stop+start to convert relative keepalive to absolute timestamp.
+  // Just set() would overwrite the absolute `at` with a relative value,
+  // causing the timer to fire immediately (relative < now_).
+  timeout.stop();
+  timeout.start(parent->keepalive, 0);
 }
 
 void
 TcpTunConn::error_cb()
 {
   TRACEPRINTF (t, 8, "TcpTunConn communication error");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] error_cb fd=%d\n", fd);
+#endif
   stop(true);
 }
 
@@ -135,6 +159,9 @@ TcpTunConn::read_cb(uint8_t *buf, size_t len)
       return done;
     if (buf[0] != HEADER_SIZE_10 || buf[1] != KNXNETIP_VERSION_10)
       {
+#ifdef ESP_PLATFORM
+        printf("[TCPTUN] read_cb: bad header %02x %02x, stopping\n", buf[0], buf[1]);
+#endif
         stop(true);
         return done;
       }
@@ -229,6 +256,10 @@ TunChannelPtr TcpTunConn::findChannel(uint8_t channelID)
 void TcpTunConn::stop(bool err)
 {
   TRACEPRINTF (t, 8, "Stop Conn");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] stop(err=%d) fd=%d secure_sid=%d running=%d\n",
+         err, fd, secure_session_id, running);
+#endif
 
 #ifdef HAVE_IPSECURE
   // Clean up secure session
@@ -332,6 +363,10 @@ static bool isPlainAllowedService(uint16_t svc)
 void
 TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
 {
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] handlePacket svc=0x%04x len=%d secure_sid=%d\n",
+         p1.service, p1.data.size(), secure_session_id);
+#endif
 #ifdef HAVE_IPSECURE
   // KNX IP Secure: handle SESSION_REQUEST (unencrypted)
   if (p1.service == SESSION_REQUEST_SVC && parent->ip_secure.isEnabled())
@@ -1221,44 +1256,51 @@ TcpTunServer::setup()
     std::string device_auth = cfg->value("device-auth", "");
     std::string device_fdsk = cfg->value("device-fdsk", "");
     std::string user_pwd = cfg->value("user-password", "");
+    std::string user_pwd_key = cfg->value("user-password-key", "");
 
     ip_secure.setSerialNumber(knx_serial);
 
+    // Helper: parse 32 hex chars → 16 bytes
+    auto parse_hex16 = [](const std::string& hex, uint8_t out[16]) -> bool {
+      if (hex.size() != 32) return false;
+      for (size_t i = 0; i < 16; i++) {
+        char *endptr;
+        long v = strtol(hex.substr(i*2, 2).c_str(), &endptr, 16);
+        if (*endptr != '\0') return false;
+        out[i] = (uint8_t)v;
+      }
+      return true;
+    };
+
     if (!device_fdsk.empty())
       {
-        // FDSK as 32 hex chars — raw 16-byte key used directly as
-        // Device Authentication Code (per 03_08_09 §2.3.1.3.3, ex-factory state)
-        if (device_fdsk.size() != 32)
-          {
-            ERRORPRINTF(t, E_WARNING | 160, "device-fdsk must be 32 hex chars, got %d", (int)device_fdsk.size());
-          }
+        uint8_t key[16];
+        if (parse_hex16(device_fdsk, key))
+          ip_secure.setDeviceAuthKey(key);
         else
-          {
-            uint8_t fdsk_bytes[16];
-            bool valid = true;
-            for (size_t i = 0; i < 16; i++)
-              {
-                char *endptr;
-                long v = strtol(device_fdsk.substr(i*2, 2).c_str(), &endptr, 16);
-                if (*endptr != '\0')
-                  { valid = false; break; }
-                fdsk_bytes[i] = (uint8_t)v;
-              }
-            if (valid)
-              ip_secure.setDeviceAuthKey(fdsk_bytes);
-            else
-              ERRORPRINTF(t, E_WARNING | 161, "device-fdsk contains non-hex characters");
-          }
+          ERRORPRINTF(t, E_WARNING | 160, "device-fdsk: expected 32 hex chars, got %d", (int)device_fdsk.size());
       }
     else if (!device_auth.empty())
       ip_secure.setDeviceAuthPassword(device_auth);
     if (ip_secure.isEnabled())
       {
-        // Per 03_08_09 §2.3.1.4.3: in ex-factory state, user passwords are empty.
-        // Empty string is valid and hashes to E9C304B914A35175FD7D1C673AB52FE1.
-        // User 1 = management (ETS commissioning), user 2 = tunnelling.
-        ip_secure.setUserPassword(1, user_pwd);
-        ip_secure.setUserPassword(2, user_pwd);
+        if (!user_pwd_key.empty())
+          {
+            // Pre-derived user password key (32 hex chars) — skips PBKDF2
+            uint8_t key[16];
+            if (parse_hex16(user_pwd_key, key))
+              {
+                ip_secure.setUserPasswordKey(1, key);
+                ip_secure.setUserPasswordKey(2, key);
+              }
+            else
+              ERRORPRINTF(t, E_WARNING | 162, "user-password-key: expected 32 hex chars");
+          }
+        else
+          {
+            ip_secure.setUserPassword(1, user_pwd);
+            ip_secure.setUserPassword(2, user_pwd);
+          }
         TRACEPRINTF(t, 2, "IP Secure: enabled for TCP tunnel server");
       }
   }

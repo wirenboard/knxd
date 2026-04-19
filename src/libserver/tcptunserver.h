@@ -87,9 +87,9 @@ private:
 protected:
   uint32_t connectionID;
 
+  int fd;
   SendBuf sendbuf;
   RecvBuf recvbuf;
-  int fd;
 
   uint8_t lastChannelID = 0;
   std::map<uint8_t, TunChannelPtr> channels;

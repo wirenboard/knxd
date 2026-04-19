@@ -19,6 +19,8 @@
 
 #include "lowlatency.h"
 
+#ifndef ESP_PLATFORM
+
 #include <cerrno>
 #include <cstring> // memcpy
 #include <sys/ioctl.h>
@@ -64,3 +66,20 @@ restore_low_latency (int fd, low_latency_save * save, const bool really)
   ioctl (fd, TCSANOW, &save->term);
 }
 
+#else /* ESP_PLATFORM */
+
+/* ESP32: no termios — UART is configured via ESP-IDF driver */
+bool
+set_low_latency (int fd, low_latency_save * save, const bool really)
+{
+  (void)fd; (void)save; (void)really;
+  return true;
+}
+
+void
+restore_low_latency (int fd, low_latency_save * save, const bool really)
+{
+  (void)fd; (void)save; (void)really;
+}
+
+#endif /* ESP_PLATFORM */

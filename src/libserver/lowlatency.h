@@ -28,16 +28,22 @@
 
 #include "config.h"
 
+#ifndef ESP_PLATFORM
 #include <termios.h>
 #ifdef HAVE_LINUX_LOWLATENCY
 #include <linux/serial.h>
 #endif
+#endif /* !ESP_PLATFORM */
 
 struct low_latency_save
 {
+#ifndef ESP_PLATFORM
   struct termios term;
 #ifdef HAVE_LINUX_LOWLATENCY
   serial_struct ser;
+#endif
+#else
+  int dummy; /* ESP32: no termios, UART configured via ESP-IDF driver */
 #endif
 };
 

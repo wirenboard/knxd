@@ -26,9 +26,19 @@
 
 #ifndef EIBNETIP_H
 #define EIBNETIP_H
+#include "knxd_queue.h"
 
 #include <ev++.h>
 #include <netinet/in.h>
+#ifdef ESP_PLATFORM
+#include <lwip/sockets.h>
+#include <sys/socket.h>
+struct ip_mreqn {
+    struct in_addr imr_multiaddr;
+    struct in_addr imr_address;
+    int imr_ifindex;
+};
+#endif
 
 #include "apdu.h"
 #include "cm_ip.h"

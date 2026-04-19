@@ -69,6 +69,7 @@ public:
   // Set device authentication code directly (16 raw bytes, e.g. FDSK from certificate)
   void setDeviceAuthKey(const uint8_t key[IPSEC_KEY_SIZE]);
   void setUserPassword(uint8_t userId, const std::string& password);
+  void setUserPasswordKey(uint8_t userId, const uint8_t key[IPSEC_KEY_SIZE]);
   void setSerialNumber(const uint8_t sno[6]);
 
 
@@ -96,6 +97,9 @@ public:
 
   bool isEnabled() const { return enabled; }
 
+#ifdef ESP_PLATFORM
+  void pregenECDHKeypair();
+#endif
 
 private:
   bool enabled;
@@ -125,6 +129,16 @@ private:
                          uint8_t* data, size_t data_len);
 
   static void xorBytes(uint8_t* out, const uint8_t* a, const uint8_t* b, size_t len);
+
+#ifdef ESP_PLATFORM
+  // Pre-generated ECDH keypair for fast session setup.
+  struct PregenKey {
+    bool ready = false;
+    uint8_t pub[IPSEC_ECDH_SIZE];
+    uint8_t priv[IPSEC_ECDH_SIZE]; // mbedTLS private key (big-endian MPI)
+  };
+  PregenKey pregen_;
+#endif
 };
 
 #endif

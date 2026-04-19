@@ -25,9 +25,17 @@
 
 void SendBuf::write(const CArray *data)
 {
+#ifdef ESP_PLATFORM
+  if (fd > 10) // skip UART noise
+    printf("[SENDBUF] write() fd=%d size=%zu ready=%d\n", fd, data->size(), ready);
+#endif
   if (!ready)
     {
       ssize_t len = ::write(fd, data->data(), data->size());
+#ifdef ESP_PLATFORM
+      printf("[SENDBUF] inline write(%d, %zu) = %zd errno=%d\n",
+             fd, data->size(), len, len<0 ? errno : 0);
+#endif
       if (len == (ssize_t)data->size())
         {
           delete data;
@@ -48,11 +56,20 @@ void SendBuf::write(const CArray *data)
 void
 SendBuf::io_cb (ev::io &, int)
 {
+#ifdef ESP_PLATFORM
+  if (fd > 10)
+    printf("[SENDBUF] io_cb fd=%d sendbuf=%p qempty=%d ready=%d\n",
+           fd, (void*)sendbuf, sendqueue.empty(), ready);
+#endif
   while (sendbuf || !sendqueue.empty())
     {
       if (sendbuf)
         {
           int i = ::write(fd,sendbuf->data()+sendpos, sendbuf->size()-sendpos);
+#ifdef ESP_PLATFORM
+          printf("[SENDBUF] write(%d, %zu) = %d errno=%d\n",
+                 fd, sendbuf->size()-sendpos, i, i<=0 ? errno : 0);
+#endif
           if (i > 0)
             {
               sendpos += i;
@@ -63,6 +80,9 @@ SendBuf::io_cb (ev::io &, int)
             {
               if (i == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
                 {
+#ifdef ESP_PLATFORM
+                  printf("[SENDBUF] WRITE ERROR fd=%d i=%d errno=%d → on_error\n", fd, i, errno);
+#endif
                   io.stop();
                   on_error();
                 }
@@ -79,6 +99,9 @@ SendBuf::io_cb (ev::io &, int)
           sendpos = 0;
         }
     }
+#ifdef ESP_PLATFORM
+  printf("[SENDBUF] all sent fd=%d → on_next\n", fd);
+#endif
   ready = false;
   io.stop();
   on_next();
@@ -87,16 +110,27 @@ SendBuf::io_cb (ev::io &, int)
 void
 RecvBuf::io_cb (ev::io &, int)
 {
+#ifdef ESP_PLATFORM
+  if (fd > 10) // skip UART fd=6 noise, only log TCP
+    printf("[RECVBUF] io_cb fd=%d recvpos=%zu\n", fd, recvpos);
+#endif
   bool some = false;
   while(sizeof(recvbuf) > recvpos)
     {
       int i = ::read(fd, recvbuf+recvpos, quick ? 1 : (sizeof(recvbuf)-recvpos));
+#ifdef ESP_PLATFORM
+      if (fd > 10) // skip UART noise
+        printf("[RECVBUF] read(%d, %zu) = %d errno=%d\n", fd, sizeof(recvbuf)-recvpos, i, i<=0 ? errno : 0);
+#endif
       if (i <= 0)
         {
           if (some)
             break;
           if (i == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
             {
+#ifdef ESP_PLATFORM
+              printf("[RECVBUF] READ ERROR fd=%d i=%d errno=%d → on_error\n", fd, i, errno);
+#endif
               io.stop();
               on_error();
             }
