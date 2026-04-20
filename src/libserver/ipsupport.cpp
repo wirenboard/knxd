@@ -227,9 +227,9 @@ err_out:
 }
 #endif
 
-#if !defined(HAVE_LINUX_NETLINK) && !defined(HAVE_WINDOWS_IPHELPER) && !defined(HAVE_BSD_SOURCEINFO)
+#if !defined(HAVE_LINUX_NETLINK) && !defined(HAVE_WINDOWS_IPHELPER) && !defined(HAVE_BSD_SOURCEINFO) && !defined(ESP_PLATFORM)
 /* Fallback: use connect()+getsockname() to determine source address.
- * Works on any platform with BSD sockets (including ESP32 lwIP). */
+ * Works on any platform with BSD sockets. */
 bool
 GetSourceAddress (TracePtr tr, const struct sockaddr_in *dest, struct sockaddr_in *src)
 {
@@ -252,6 +252,37 @@ GetSourceAddress (TracePtr tr, const struct sockaddr_in *dest, struct sockaddr_i
   }
 
   close(s);
+  return true;
+}
+#endif
+
+#ifdef ESP_PLATFORM
+/* lwIP's getsockname() on a connect()-only UDP socket returns 0.0.0.0
+ * because the local binding isn't materialized until a packet is sent.
+ * Query esp_netif directly for an interface IP. Iterate all netifs and
+ * prefer the first one with a valid (non-zero) IPv4 address. Always
+ * returns true so EIBnetDriver setup doesn't fail at boot before the
+ * STA interface has finished DHCP — the SEARCH_RESPONSE handler will
+ * re-resolve the address when actually needed. */
+#include "esp_netif.h"
+bool
+GetSourceAddress (TracePtr, const struct sockaddr_in *dest, struct sockaddr_in *src)
+{
+  static const char *prefer[] = {"WIFI_STA_DEF", "ETH_DEF", "WIFI_AP_DEF", NULL};
+  esp_netif_ip_info_t info;
+  uint32_t ip = 0;
+  for (int i = 0; prefer[i]; i++)
+    {
+      esp_netif_t *netif = esp_netif_get_handle_from_ifkey(prefer[i]);
+      if (netif && esp_netif_get_ip_info(netif, &info) == ESP_OK && info.ip.addr != 0)
+        {
+          ip = info.ip.addr;
+          break;
+        }
+    }
+  memset(src, 0, sizeof(*src));
+  src->sin_family = AF_INET;
+  src->sin_addr.s_addr = ip;
   return true;
 }
 #endif
