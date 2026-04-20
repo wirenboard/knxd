@@ -1,0 +1,24 @@
+[1/10] Performing build step for 'bootloader'
+[1/1] cd /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/bootloader/esp-idf/esptool_py && /home/boger.linux/.espressif/python_env/idf5.4_py3.13_env/bin/python /opt/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x1000 /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/bootloader/bootloader.bin
+Bootloader binary size 0x6560 bytes. 0xaa0 bytes (9%) free.
+[2/10] No install step for 'bootloader'
+[3/10] Completed 'bootloader'
+[4/10] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/main.cpp.obj
+/home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/main/main.cpp:98:13: warning: 'bool test_handshake()' defined but not used [-Wunused-function]
+   98 | static bool test_handshake(void) {
+      |             ^~~~~~~~~~~~~~
+/home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/main/main.cpp:53:13: warning: 'bool test_pbkdf2()' defined but not used [-Wunused-function]
+   53 | static bool test_pbkdf2(void) {
+      |             ^~~~~~~~~~~
+[5/10] Building CXX object esp-idf/main/CMakeFiles/__idf_main.dir/ipsecure.cpp.obj
+[6/10] Linking C static library esp-idf/main/libmain.a
+[7/10] Generating ld/sections.ld
+[8/10] Linking CXX executable knxd_ipsecure_test.elf
+[9/10] Generating binary image from built executable
+esptool.py v4.11.0
+Creating esp32 image...
+Merged 2 ELF sections
+Successfully created esp32 image.
+Generated /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/knxd_ipsecure_test.bin
+[10/10] cd /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/esp-idf/esptool_py && /home/boger.linux/.espressif/python_env/idf5.4_py3.13_env/bin/python /opt/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/partition_table/partition-table.bin /home/boger/work/board/tmp/knx/knxd-esp32/esp32-test/build/knxd_ipsecure_test.bin
+knxd_ipsecure_test.bin binary size 0x70630 bytes. Smallest app partition is 0x177000 bytes. 0x1069d0 bytes (70%) free.

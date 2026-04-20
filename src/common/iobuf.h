@@ -28,7 +28,7 @@
 #include "callbacks.h"
 #include <cassert>
 #include <ev++.h>
-#include <queue.h>
+#include "knxd_queue.h"
 #include <cerrno>
 
 void set_non_blocking(int fd);
@@ -54,6 +54,7 @@ public:
     set_non_blocking(fd);
     this->fd = fd;
     io.set<SendBuf, &SendBuf::io_cb>(this);
+    io.set(fd, ev::WRITE); // pre-set fd/events so io.start() (no args) works
     on_error.set<SendBuf,&SendBuf::error_cb>(this);
     on_next.set<SendBuf,&SendBuf::next_cb>(this);
   };

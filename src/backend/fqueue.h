@@ -27,7 +27,7 @@ supports it.
 #ifndef FQUEUE_H
 #define FQUEUE_H
 #include "link.h"
-#include "queue.h"
+#include "knxd_queue.h"
 
 enum QSTATE
 {

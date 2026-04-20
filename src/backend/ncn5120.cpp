@@ -29,7 +29,9 @@ public:
   virtual ~NCN5120wrap() = default;
 
 protected:
+#ifndef ESP_PLATFORM
   void termios_settings(struct termios &t);
+#endif
   unsigned int default_baudrate();
   void setstate(enum TSTATE state);
 
@@ -52,6 +54,7 @@ protected:
   {
     return 38400;
   }
+#ifndef ESP_PLATFORM
   void termios_settings(struct termios &t1)
   {
     t1.c_cflag = CS8 | CLOCAL | CREAD;
@@ -61,6 +64,7 @@ protected:
     t1.c_cc[VTIME] = 1;
     t1.c_cc[VMIN] = 0;
   }
+#endif
 };
 
 LowLevelFilter *

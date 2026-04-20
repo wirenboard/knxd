@@ -26,9 +26,19 @@
 
 #ifndef EIBNETIP_H
 #define EIBNETIP_H
+#include "knxd_queue.h"
 
 #include <ev++.h>
 #include <netinet/in.h>
+#ifdef ESP_PLATFORM
+#include <lwip/sockets.h>
+#include <sys/socket.h>
+struct ip_mreqn {
+    struct in_addr imr_multiaddr;
+    struct in_addr imr_address;
+    int imr_ifindex;
+};
+#endif
 
 #include "apdu.h"
 #include "cm_ip.h"
@@ -91,7 +101,7 @@ enum ServiceType : uint16_t
   SESSION_REQUEST_SVC = 0x0951,
   SESSION_RESPONSE_SVC = 0x0952,
   SESSION_AUTHENTICATE_SVC = 0x0953,
-  SESSION_STATUS_SVC_ID = 0x0954,
+  SESSION_STATUS_SVC = 0x0954,
 
   /* Object Server (0x0800 .. 0x8FF) */
 };
@@ -128,6 +138,8 @@ enum DIBcode : uint8_t
 {
   DEVICE_INFO = 0x01,
   SUPP_SVC_FAMILIES = 0x02,
+  SECURE_SVC_FAMILIES = 0x06,  // 03_08_09 §5.1.3.6
+  TUNNELLING_INFO = 0x07,      // 03_08_02 §8.6.3.8
   MFR_DATA = 0xFE,
 };
 

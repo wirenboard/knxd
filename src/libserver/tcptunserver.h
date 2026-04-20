@@ -77,14 +77,25 @@ public:
 #ifdef HAVE_IPSECURE
   // IP Secure session for this connection (0 = not secure)
   uint16_t secure_session_id = 0;
+#ifdef ESP_PLATFORM
+  // Tracks whether g_knx_secure was incremented for this conn so the
+  // destructor decrements exactly once even after stop() resets the
+  // session id to 0.
+  bool secure_counted = false;
 #endif
+#endif
+
+private:
+  // Dispatches a KNXnet/IP service that has already passed the IP Secure gate:
+  // either unwrapped from a SECURE_WRAPPER, or accepted on a plain server.
+  void handleInnerPacket(const EIBNetIPPacket &p1);
 
 protected:
   uint32_t connectionID;
 
+  int fd;
   SendBuf sendbuf;
   RecvBuf recvbuf;
-  int fd;
 
   uint8_t lastChannelID = 0;
   std::map<uint8_t, TunChannelPtr> channels;
@@ -117,6 +128,8 @@ protected:
 
   /** KNX serial number (6 bytes, for discovery and IP Secure) */
   uint8_t knx_serial[6] = {};
+  /** Cached MAC address of first non-loopback interface */
+  uint8_t local_mac[6] = {};
 
 #ifdef HAVE_IPSECURE
   /** KNX IP Secure */

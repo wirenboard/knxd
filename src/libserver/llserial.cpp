@@ -22,14 +22,18 @@
 
 #include <cerrno>
 #include <fcntl.h>
+#include <unistd.h>
+#ifdef ESP_PLATFORM
+#include "driver/uart.h"
+#endif
+
+#ifndef ESP_PLATFORM
 #include <sys/ioctl.h>
 #include <termios.h>
-#include <unistd.h>
 #ifdef HAVE_LINUX_LOWLATENCY
 #include <cstring> // memcpy
 #include <sys/ioctl.h>
 #endif
-
 
 static speed_t getbaud(int baud)
 {
@@ -47,6 +51,7 @@ static speed_t getbaud(int baud)
       return 0;
     }
 }
+#endif /* !ESP_PLATFORM */
 
 bool
 LLserial::setup()
@@ -61,11 +66,13 @@ LLserial::setup()
       return false;
     }
   baudrate = cfg->value("baudrate", (int)default_baudrate());
+#ifndef ESP_PLATFORM
   if (getbaud(baudrate) == 0)
     {
       ERRORPRINTF (t, E_ERROR | 66, "Wrong baudrate= config");
       return false;
     }
+#endif
   low_latency = cfg->value("low-latency",false);
 
   return true;
@@ -74,6 +81,8 @@ LLserial::setup()
 void
 LLserial::start()
 {
+#ifndef ESP_PLATFORM
+  /* Linux: open serial device with termios configuration */
   struct termios t1;
   int term_baudrate;
 
@@ -139,19 +148,45 @@ ex2:
   fd = -1;
 ex1:
   stopped(true);
+
+#else
+  /* ESP32: UART already configured via ESP-IDF driver + VFS.
+   * The device path is expected to be either:
+   *   /dev/uart/N — opened by platform_uart_init()
+   *   /dev/fd/N   — an already-opened file descriptor
+   */
+  if (dev.substr(0, 8) == "/dev/fd/") {
+    /* Pre-opened fd from platform init */
+    fd = std::stoi(dev.substr(8));
+  } else {
+    fd = open(dev.c_str(), O_RDWR | O_NONBLOCK);
+  }
+
+  if (fd < 0) {
+    ERRORPRINTF (t, E_ERROR | 67, "Opening %s failed: %s", dev, strerror(errno));
+    stopped(true);
+    return;
+  }
+
+  TRACEPRINTF(t, 0, "Opened %s (ESP32 UART, baud %d)", dev, baudrate);
+  FDdriver::start();
+#endif
 }
 
 void
 LLserial::stop(bool err)
 {
+#ifndef ESP_PLATFORM
   if (fd >= 0)
     restore_low_latency (fd, &sold, low_latency);
+#endif
   FDdriver::stop(err);
 }
 
 int
 LLserial::enable_input_parity_check()
 {
+#ifndef ESP_PLATFORM
   struct termios t1;
 
   TRACEPRINTF (t, 8, "Enabling input parity check on fd %d\n", fd);
@@ -169,6 +204,12 @@ LLserial::enable_input_parity_check()
     ERRORPRINTF (t, E_ERROR | 70, "tcsetattr failed: %s", strerror(errno));
     return -2;
   }
+#else
+  /* ESP32: NCN5120 parity check is an L2 feature, not UART framing.
+   * The UART stays 8N1. The NCN5120 checks parity on the KNX TP bus,
+   * not on the UART interface. */
+  TRACEPRINTF (t, 8, "Input parity check: NCN5120 handles L2 parity internally");
+#endif
 
   return 0;
 }

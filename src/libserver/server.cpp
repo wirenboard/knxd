@@ -19,6 +19,7 @@
 
 #include "server.h"
 
+#include <cstdio>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -112,16 +113,31 @@ NetServerBase::io_cb (ev::io &, int)
 {
   int cfd;
   cfd = accept (fd, NULL,NULL);
+#ifdef ESP_PLATFORM
+  printf("[SERVER] accept() fd=%d -> cfd=%d errno=%d\n", fd, cfd, cfd < 0 ? errno : 0);
+#endif
   if (cfd != -1)
     {
       TRACEPRINTF (t, 8, "New Connection");
       setupConnection (cfd);
       ClientConnBasePtr c = createConnection(cfd);
-      if (!c)
+      if (!c) {
+#ifdef ESP_PLATFORM
+        printf("[SERVER] createConnection(%d) returned null\n", cfd);
+#endif
         return;
-      if (!c->setup())
+      }
+      if (!c->setup()) {
+#ifdef ESP_PLATFORM
+        printf("[SERVER] connection setup failed cfd=%d\n", cfd);
+#endif
         return;
+      }
       c->start();
+#ifdef ESP_PLATFORM
+      printf("[SERVER] connection started cfd=%d running=%d total=%zu\n",
+             cfd, c->running, connections.size() + (c->running ? 1 : 0));
+#endif
       if (c->running)
         connections.push_back(c);
     }

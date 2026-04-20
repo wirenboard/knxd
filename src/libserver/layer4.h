@@ -26,6 +26,7 @@
 
 #ifndef LAYER4_H
 #define LAYER4_H
+#include "knxd_queue.h"
 
 #include "link.h"
 #include "router.h"

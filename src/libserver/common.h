@@ -30,7 +30,7 @@
 
 #include <ev++.h>
 
-#include "queue.h"
+#include "knxd_queue.h"
 #include "trace.h"
 #include "types.h"
 

@@ -26,6 +26,53 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#ifdef __linux__
+#include <netpacket/packet.h>
+#endif
+#ifndef ESP_PLATFORM
+#include <ifaddrs.h>
+#endif
+
+// Get MAC address of first non-loopback ethernet interface
+static void getLocalMAC(uint8_t mac[6])
+{
+  memset(mac, 0, 6);
+#ifdef __linux__
+  struct ifaddrs *ifaddr, *ifa;
+  if (getifaddrs(&ifaddr) == -1)
+    return;
+  for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
+    {
+      if (ifa->ifa_addr == nullptr)
+        continue;
+      if (ifa->ifa_addr->sa_family != AF_PACKET)
+        continue;
+      if (ifa->ifa_flags & IFF_LOOPBACK)
+        continue;
+      struct sockaddr_ll *sll = (struct sockaddr_ll *)ifa->ifa_addr;
+      if (sll->sll_halen != 6)
+        continue;
+      // Skip all-zero MACs
+      bool zero = true;
+      for (int i = 0; i < 6; i++)
+        if (sll->sll_addr[i])
+          { zero = false; break; }
+      if (zero)
+        continue;
+      memcpy(mac, sll->sll_addr, 6);
+      break;
+    }
+  freeifaddrs(ifaddr);
+#endif
+}
+
+#ifdef ESP_PLATFORM
+#include <atomic>
+extern std::atomic<uint16_t> g_knx_clients;
+extern std::atomic<uint16_t> g_knx_secure;
+#endif
 
 TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
   : t(TracePtr(new Trace(*parent->t)))
@@ -35,6 +82,9 @@ TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
   , fd(fd)
 {
   this->parent = parent;
+#ifdef ESP_PLATFORM
+  g_knx_clients.fetch_add(1, std::memory_order_relaxed);
+#endif
 
   recvbuf.on_read.set<TcpTunConn, &TcpTunConn::read_cb>(this);
   recvbuf.on_error.set<TcpTunConn, &TcpTunConn::error_cb>(this);
@@ -73,17 +123,42 @@ TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
 TcpTunConn::~TcpTunConn()
 {
   TRACEPRINTF (t, 8, "Closing TcpTunConn");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] ~TcpTunConn fd=%d secure_sid=%d channels=%zu\n",
+         fd, secure_session_id, channels.size());
+  g_knx_clients.fetch_sub(1, std::memory_order_relaxed);
+  if (secure_counted)
+    g_knx_secure.fetch_sub(1, std::memory_order_relaxed);
+#endif
+  /* Explicitly clear shared_ptrs before implicit member destruction.
+   * The shared_ptr destructor chain (Trace → IniSection, TunChannel →
+   * LinkConnectClient) references objects that must be released while
+   * the Router and IniData are still alive, not during the implicit
+   * member destruction which can race with async cleanup. */
+  channels.clear();
+  t.reset();
+  if (fd >= 0) { close(fd); fd = -1; }
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] ~TcpTunConn done\n");
+#endif
 }
 
 void TcpTunConn::reset_timer()
 {
-  timeout.set(parent->keepalive, 0);
+  // Must stop+start to convert relative keepalive to absolute timestamp.
+  // Just set() would overwrite the absolute `at` with a relative value,
+  // causing the timer to fire immediately (relative < now_).
+  timeout.stop();
+  timeout.start(parent->keepalive, 0);
 }
 
 void
 TcpTunConn::error_cb()
 {
   TRACEPRINTF (t, 8, "TcpTunConn communication error");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] error_cb fd=%d\n", fd);
+#endif
   stop(true);
 }
 
@@ -96,6 +171,9 @@ TcpTunConn::read_cb(uint8_t *buf, size_t len)
       return done;
     if (buf[0] != HEADER_SIZE_10 || buf[1] != KNXNETIP_VERSION_10)
       {
+#ifdef ESP_PLATFORM
+        printf("[TCPTUN] read_cb: bad header %02x %02x, stopping\n", buf[0], buf[1]);
+#endif
         stop(true);
         return done;
       }
@@ -190,6 +268,10 @@ TunChannelPtr TcpTunConn::findChannel(uint8_t channelID)
 void TcpTunConn::stop(bool err)
 {
   TRACEPRINTF (t, 8, "Stop Conn");
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] stop(err=%d) fd=%d secure_sid=%d running=%d\n",
+         err, fd, secure_session_id, running);
+#endif
 
 #ifdef HAVE_IPSECURE
   // Clean up secure session
@@ -268,12 +350,37 @@ TcpTunConn::send(const EIBNetIPPacket& p)
     sendbuf.write(data.data(), data.size());
 }
 
+#ifdef HAVE_IPSECURE
+// Services that must not be accepted in plain TCP on a secure-only server.
+// SESSION_REQUEST, SECURE_WRAPPER, SEARCH_REQUEST*, DESCRIPTION_REQUEST remain
+// allowed in plain because they are part of (or equivalent to) the handshake.
+// Services allowed in plain TCP even on a secure-only server.
+// Everything else must arrive inside a SECURE_WRAPPER.
+static bool isPlainAllowedService(uint16_t svc)
+{
+  switch (svc)
+    {
+    case SESSION_REQUEST_SVC:
+    case SECURE_WRAPPER_SVC:
+    case SEARCH_REQUEST:
+    case SEARCH_REQUEST_EXTENDED:
+    case DESCRIPTION_REQUEST:
+      return true;
+    default:
+      return false;
+    }
+}
+#endif
+
 void
 TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
 {
+#ifdef ESP_PLATFORM
+  printf("[TCPTUN] handlePacket svc=0x%04x len=%d secure_sid=%d\n",
+         p1.service, p1.data.size(), secure_session_id);
+#endif
 #ifdef HAVE_IPSECURE
   // KNX IP Secure: handle SESSION_REQUEST (unencrypted)
-#ifdef HAVE_IPSECURE
   if (p1.service == SESSION_REQUEST_SVC && parent->ip_secure.isEnabled())
     {
       CArray raw = p1.ToPacket();
@@ -285,6 +392,13 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
         }
       // Extract session ID from response (bytes 6-7)
       secure_session_id = ((uint16_t)resp[6] << 8) | resp[7];
+#ifdef ESP_PLATFORM
+      if (!secure_counted)
+        {
+          g_knx_secure.fetch_add(1, std::memory_order_relaxed);
+          secure_counted = true;
+        }
+#endif
       TRACEPRINTF(t, 2, "IP Secure: new session %d", secure_session_id);
       t->TracePacket(0, "TCP send SESSION_RESPONSE", resp.size(), resp.data());
       if (fd >= 0)
@@ -292,7 +406,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       reset_timer();
       return;
     }
-#endif
 
   // KNX IP Secure: unwrap SECURE_WRAPPER
   if (p1.service == SECURE_WRAPPER_SVC && secure_session_id != 0)
@@ -331,7 +444,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
             secure_session_id, inner.data(), inner.size());
           if (ok)
             {
-#ifdef HAVE_IPSECURE
               auto* session = parent->ip_secure.findSession(secure_session_id);
               TRACEPRINTF(t, 2, "IP Secure: session %d authenticated (user %d)",
                           secure_session_id, session ? session->user_id : 0);
@@ -343,7 +455,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
                   if (fd >= 0)
                     sendbuf.write(status.data(), status.size());
                 }
-#endif
             }
           else
             {
@@ -359,7 +470,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
         }
 
       // Handle SESSION_STATUS (keepalive/close)
-      if (inner_pkt->service == SESSION_STATUS_SVC_ID)
+      if (inner_pkt->service == SESSION_STATUS_SVC)
         {
           if (inner.size() >= 7)
             {
@@ -377,7 +488,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
                 }
               else if (status == STATUS_KEEPALIVE)
                 {
-#ifdef HAVE_IPSECURE
                   auto* session = parent->ip_secure.findSession(secure_session_id);
                   if (session && session->state != SecureSession::AUTHENTICATED)
                     {
@@ -389,7 +499,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
                       parent->ip_secure.removeSession(secure_session_id);
                       secure_session_id = 0;
                     }
-#endif
                   // Authenticated keepalive is a no-op (timer already reset)
                 }
             }
@@ -397,7 +506,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
         }
 
       // Check authentication before forwarding any other service
-#ifdef HAVE_IPSECURE
       auto* session = parent->ip_secure.findSession(secure_session_id);
       if (!session || session->state != SecureSession::AUTHENTICATED)
         {
@@ -409,15 +517,31 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           parent->ip_secure.removeSession(secure_session_id);
           secure_session_id = 0;
           return;
-#endif
         }
 
-      // Forward the unwrapped inner packet to normal handler
-      handlePacket(*inner_pkt);
+      // Forward the decrypted inner frame to the normal dispatcher
+      handleInnerPacket(*inner_pkt);
+      return;
+    }
+
+  // Plain TCP frame on a secure-only server: drop everything that isn't a
+  // handshake-allowed service and tear down the connection. 03_08_09 §4.2
+  // says the server must not respond to such frames.
+  if (parent->ip_secure.isEnabled() && !isPlainAllowedService(p1.service))
+    {
+      TRACEPRINTF(t, 2, "IP Secure: rejecting plain service 0x%04x on secure-only server",
+                  p1.service);
+      stop(false);
       return;
     }
 #endif
 
+  handleInnerPacket(p1);
+}
+
+void
+TcpTunConn::handleInnerPacket(const EIBNetIPPacket &p1)
+{
   if (p1.service == CONNECTIONSTATE_REQUEST)
     {
       EIBnet_ConnectionStateRequest r1;
@@ -687,6 +811,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.installid = 0;
       memcpy(&r2.serial, parent->knx_serial, 6);
       inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
+      memcpy(r2.MAC, parent->local_mac, 6);
       strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
       // 03_08_02 Core v01.06.02, §7.5.4.3 Table 3
       // version 2 = KNXnet/IP v2 with TCP support
@@ -701,6 +826,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       if (parent->ip_secure.isEnabled())
         {
           d.family = SF_SECURITY;
+          d.version = 1; // 03_08_09 §5.1.3.6: Security family version 1
           r2.services.push_back(d);
         }
 #endif
@@ -710,6 +836,8 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       {
         Router& rtr = static_cast<Router &>(parent->router);
         int num_slots = rtr.getClientAddrsLen() > 0 ? rtr.getClientAddrsLen() : 4;
+        if (num_slots > 62) // DIB length is uint8_t, max 254 bytes = 4 + 62*4
+          num_slots = 62;
         eibaddr_t base_addr = rtr.getClientAddrsStart();
         int tun_dib_len = 4 + num_slots * 4;
 
@@ -718,12 +846,13 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
 #ifdef HAVE_IPSECURE
         if (parent->ip_secure.isEnabled())
           sec_dib_len = 2 + 2 + 2; // header(2) + DevMgmt(2) + Tunnelling(2)
+#endif
 
         r2.optional.resize(tun_dib_len + sec_dib_len);
 
         // Tunnelling Info DIB
         r2.optional[0] = tun_dib_len;
-        r2.optional[1] = 0x07;
+        r2.optional[1] = TUNNELLING_INFO;
         r2.optional[2] = (parent->maxAPDULength >> 8) & 0xFF;
         r2.optional[3] = parent->maxAPDULength & 0xFF;
         for (int i = 0; i < num_slots; i++)
@@ -734,7 +863,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
             r2.optional[4 + i*4 + 2] = 0xFF;
             r2.optional[4 + i*4 + 3] = 0xFF;
           }
-#endif
 
         // Secure Service Families DIB (type 0x06)
 #ifdef HAVE_IPSECURE
@@ -742,7 +870,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           {
             int off = tun_dib_len;
             r2.optional[off + 0] = sec_dib_len;
-            r2.optional[off + 1] = 0x06; // SecureServiceFamilies
+            r2.optional[off + 1] = SECURE_SVC_FAMILIES;
             r2.optional[off + 2] = SF_DEVICE_MANAGEMENT;
             r2.optional[off + 3] = 0x01; // version 1
             r2.optional[off + 4] = SF_TUNNELLING;
@@ -969,6 +1097,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       r2.installid = 0;
       memcpy(&r2.serial, parent->knx_serial, 6);
       inet_pton(AF_INET, "224.0.23.12", &r2.multicastaddr);
+      memcpy(r2.MAC, parent->local_mac, 6);
       strncpy((char *) r2.name, router.servername.c_str(), sizeof(r2.name) - 1);
       // HPAI: route-back for TCP (spec: "only report UDP address", use 0.0.0.0:0)
       memset(&r2.caddr, 0, sizeof(r2.caddr));
@@ -985,6 +1114,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       if (parent->ip_secure.isEnabled())
         {
           d.family = SF_SECURITY;
+          d.version = 1; // 03_08_09 §5.1.3.6: Security family version 1
           r2.services.push_back(d);
         }
 #endif
@@ -994,17 +1124,22 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       // Append Tunnelling Info DIB (type 0x07) + Secure Service Families DIB (type 0x06)
       {
         int num_slots = router.getClientAddrsLen() > 0 ? router.getClientAddrsLen() : 4;
+        if (num_slots > 62) // DIB length is uint8_t, max 254 bytes = 4 + 62*4
+          num_slots = 62;
         eibaddr_t base_addr = router.getClientAddrsStart();
         int tun_dib_len = 4 + num_slots * 4;
+        int sec_dib_len = 0;
 #ifdef HAVE_IPSECURE
-        int sec_dib_len = parent->ip_secure.isEnabled() ? 6 : 0; // 2+2+2
+        if (parent->ip_secure.isEnabled())
+          sec_dib_len = 6; // 2+2+2
+#endif
 
         size_t old_size = pkt.data.size();
         pkt.data.resize(old_size + tun_dib_len + sec_dib_len);
 
         // Tunnelling Info DIB
         pkt.data[old_size + 0] = tun_dib_len;
-        pkt.data[old_size + 1] = 0x07;
+        pkt.data[old_size + 1] = TUNNELLING_INFO;
         pkt.data[old_size + 2] = (parent->maxAPDULength >> 8) & 0xFF;
         pkt.data[old_size + 3] = parent->maxAPDULength & 0xFF;
         for (int i = 0; i < num_slots; i++)
@@ -1015,7 +1150,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
             pkt.data[old_size + 4 + i*4 + 2] = 0xFF;
             pkt.data[old_size + 4 + i*4 + 3] = 0xFF;
           }
-#endif
 
         // Secure Service Families DIB (type 0x06)
 #ifdef HAVE_IPSECURE
@@ -1023,7 +1157,7 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           {
             size_t off = old_size + tun_dib_len;
             pkt.data[off + 0] = 6; // length
-            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 1] = SECURE_SVC_FAMILIES;
             pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
             pkt.data[off + 3] = 0x01;
             pkt.data[off + 4] = SF_TUNNELLING;
@@ -1117,6 +1251,7 @@ TcpTunServer::setup()
       for (int i = 0; i < 6; i++)
         sscanf(sn.c_str() + i*2, "%2hhx", &knx_serial[i]);
   }
+  getLocalMAC(local_mac);
 
 #ifdef HAVE_IPSECURE
   // KNX IP Secure configuration (03_08_09)
@@ -1138,19 +1273,55 @@ TcpTunServer::setup()
   // directly via TCP if the address is known.
   {
     std::string device_auth = cfg->value("device-auth", "");
+    std::string device_fdsk = cfg->value("device-fdsk", "");
     std::string user_pwd = cfg->value("user-password", "");
+    std::string user_pwd_key = cfg->value("user-password-key", "");
 
     ip_secure.setSerialNumber(knx_serial);
 
-    if (!device_auth.empty())
-      ip_secure.setDeviceAuthPassword(device_auth);
-    if (!user_pwd.empty())
-      {
-        ip_secure.setUserPassword(1, user_pwd); // management (ETS commissioning)
-        ip_secure.setUserPassword(2, user_pwd); // tunnelling (visualizations, etc.)
+    // Helper: parse 32 hex chars → 16 bytes
+    auto parse_hex16 = [](const std::string& hex, uint8_t out[16]) -> bool {
+      if (hex.size() != 32) return false;
+      for (size_t i = 0; i < 16; i++) {
+        char *endptr;
+        long v = strtol(hex.substr(i*2, 2).c_str(), &endptr, 16);
+        if (*endptr != '\0') return false;
+        out[i] = (uint8_t)v;
       }
+      return true;
+    };
+
+    if (!device_fdsk.empty())
+      {
+        uint8_t key[16];
+        if (parse_hex16(device_fdsk, key))
+          ip_secure.setDeviceAuthKey(key);
+        else
+          ERRORPRINTF(t, E_WARNING | 160, "device-fdsk: expected 32 hex chars, got %d", (int)device_fdsk.size());
+      }
+    else if (!device_auth.empty())
+      ip_secure.setDeviceAuthPassword(device_auth);
     if (ip_secure.isEnabled())
-      TRACEPRINTF(t, 2, "IP Secure: enabled for TCP tunnel server");
+      {
+        if (!user_pwd_key.empty())
+          {
+            // Pre-derived user password key (32 hex chars) — skips PBKDF2
+            uint8_t key[16];
+            if (parse_hex16(user_pwd_key, key))
+              {
+                ip_secure.setUserPasswordKey(1, key);
+                ip_secure.setUserPasswordKey(2, key);
+              }
+            else
+              ERRORPRINTF(t, E_WARNING | 162, "user-password-key: expected 32 hex chars");
+          }
+        else
+          {
+            ip_secure.setUserPassword(1, user_pwd);
+            ip_secure.setUserPassword(2, user_pwd);
+          }
+        TRACEPRINTF(t, 2, "IP Secure: enabled for TCP tunnel server");
+      }
   }
 #endif
 

@@ -18,6 +18,7 @@
 */
 
 #include <unistd.h>
+#include "router.h"
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -43,6 +44,7 @@ public:
   }
   virtual ~TPUARTserial() = default;
 protected:
+#ifndef ESP_PLATFORM
   void termios_settings (struct termios &t1)
   {
     t1.c_cflag = CS8 | CLOCAL | CREAD | PARENB;
@@ -52,6 +54,7 @@ protected:
     t1.c_cc[VTIME] = 1;
     t1.c_cc[VMIN] = 0;
   }
+#endif
   unsigned int default_baudrate()
   {
     return 19200;
@@ -158,6 +161,24 @@ TPUARTwrap::setup()
       if (f)
         my_addr = f->addr;
     }
+#ifdef ESP_PLATFORM
+  // On ESP32, the filter chain isn't fully built yet when TPUARTwrap::setup()
+  // runs, so findFilter("single") returns null. Read the address directly
+  // from config to enable NCN5120 hardware ACK (critical for bus timing).
+  if (my_addr == 0)
+    {
+      std::string addr_str = cfg->value("addr", "");
+      if (!addr_str.empty())
+        {
+          unsigned a = 0, b = 0, c = 0;
+          if (sscanf(addr_str.c_str(), "%u.%u.%u", &a, &b, &c) == 3)
+            my_addr = (a << 12) | (b << 8) | c;
+        }
+      if (my_addr)
+        TRACEPRINTF(t, 0, "HW ACK addr %d.%d.%d",
+                    (my_addr >> 12) & 0xF, (my_addr >> 8) & 0xF, my_addr & 0xFF);
+    }
+#endif
 
   if (!LowLevelFilter::setup())
     return false;

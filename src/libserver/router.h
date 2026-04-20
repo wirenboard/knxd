@@ -26,6 +26,7 @@
 
 #ifndef ROUTER_H
 #define ROUTER_H
+#include "knxd_queue.h"
 
 #include <unordered_map>
 
@@ -177,6 +178,9 @@ public:
   {
     return all_running;
   }
+
+  /** Read-only access to the registered links map (for stats/introspection). */
+  const std::unordered_map<int, LinkConnectPtr>& getLinks() const { return links; }
 
 private:
   Factory<Server>& servers;

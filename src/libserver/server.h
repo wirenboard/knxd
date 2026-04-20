@@ -25,6 +25,7 @@
 
 #ifndef SERVER_H
 #define SERVER_H
+#include "knxd_queue.h"
 
 #include "common.h"
 #include "link.h"

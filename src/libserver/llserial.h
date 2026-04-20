@@ -26,7 +26,9 @@
 #ifndef LLSERIAL
 #define LLSERIAL
 
+#ifndef ESP_PLATFORM
 #include <termios.h>
+#endif
 
 #include "iobuf.h"
 #include "lowlatency.h"
@@ -51,9 +53,10 @@ public:
 
 private:
   low_latency_save sold;
+#ifndef ESP_PLATFORM
   struct termios old;
-
   virtual void termios_settings (struct termios &t) = 0;
+#endif
   virtual unsigned int default_baudrate () = 0;
 
   std::string dev;
