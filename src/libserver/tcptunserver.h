@@ -77,6 +77,12 @@ public:
 #ifdef HAVE_IPSECURE
   // IP Secure session for this connection (0 = not secure)
   uint16_t secure_session_id = 0;
+#ifdef ESP_PLATFORM
+  // Tracks whether g_knx_secure was incremented for this conn so the
+  // destructor decrements exactly once even after stop() resets the
+  // session id to 0.
+  bool secure_counted = false;
+#endif
 #endif
 
 private:

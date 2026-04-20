@@ -68,6 +68,12 @@ static void getLocalMAC(uint8_t mac[6])
 #endif
 }
 
+#ifdef ESP_PLATFORM
+#include <atomic>
+extern std::atomic<uint16_t> g_knx_clients;
+extern std::atomic<uint16_t> g_knx_secure;
+#endif
+
 TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
   : t(TracePtr(new Trace(*parent->t)))
   , sendbuf(fd)
@@ -76,6 +82,9 @@ TcpTunConn::TcpTunConn(TcpTunServerBase *parent, uint32_t connectionID, int fd)
   , fd(fd)
 {
   this->parent = parent;
+#ifdef ESP_PLATFORM
+  g_knx_clients.fetch_add(1, std::memory_order_relaxed);
+#endif
 
   recvbuf.on_read.set<TcpTunConn, &TcpTunConn::read_cb>(this);
   recvbuf.on_error.set<TcpTunConn, &TcpTunConn::error_cb>(this);
@@ -117,6 +126,9 @@ TcpTunConn::~TcpTunConn()
 #ifdef ESP_PLATFORM
   printf("[TCPTUN] ~TcpTunConn fd=%d secure_sid=%d channels=%zu\n",
          fd, secure_session_id, channels.size());
+  g_knx_clients.fetch_sub(1, std::memory_order_relaxed);
+  if (secure_counted)
+    g_knx_secure.fetch_sub(1, std::memory_order_relaxed);
 #endif
   /* Explicitly clear shared_ptrs before implicit member destruction.
    * The shared_ptr destructor chain (Trace → IniSection, TunChannel →
@@ -380,6 +392,13 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
         }
       // Extract session ID from response (bytes 6-7)
       secure_session_id = ((uint16_t)resp[6] << 8) | resp[7];
+#ifdef ESP_PLATFORM
+      if (!secure_counted)
+        {
+          g_knx_secure.fetch_add(1, std::memory_order_relaxed);
+          secure_counted = true;
+        }
+#endif
       TRACEPRINTF(t, 2, "IP Secure: new session %d", secure_session_id);
       t->TracePacket(0, "TCP send SESSION_RESPONSE", resp.size(), resp.data());
       if (fd >= 0)

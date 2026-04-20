@@ -21,6 +21,12 @@
 #include "tcptunserver.h"
 #include "eibnetserver.h"
 
+#ifdef ESP_PLATFORM
+#include <atomic>
+extern std::atomic<uint32_t> g_knx_tx_count;
+extern std::atomic<uint32_t> g_knx_rx_count;
+#endif
+
 TunChannel::TunChannel(const TcpTunConnPtr& connection, uint8_t channelID)
   : t(TracePtr(new Trace(*connection->t)))
   , connection(connection)
@@ -226,7 +232,12 @@ void TunServiceLinkLayer::send_L_Data (LDataPtr l)
 {
   auto channel_ptr = this->channel.lock();
   if (channel_ptr)
-    channel_ptr->sendTunnelRequest(L_Data_ToCEMI(0x29, l));
+    {
+      channel_ptr->sendTunnelRequest(L_Data_ToCEMI(0x29, l));
+#ifdef ESP_PLATFORM
+      g_knx_tx_count.fetch_add(1, std::memory_order_relaxed);
+#endif
+    }
 
   send_Next();
 }
@@ -253,6 +264,9 @@ ErrorCode TunServiceLinkLayer::handleTunnelRequest(EIBnet_TunnelRequest &r1)
   if (r1.CEMI[0] == 0x11 || r1.CEMI[0] == 0x29)
     {
       recv_L_Data(std::move(c));
+#ifdef ESP_PLATFORM
+      g_knx_rx_count.fetch_add(1, std::memory_order_relaxed);
+#endif
       return E_NO_ERROR;
     }
   else
