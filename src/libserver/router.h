@@ -152,6 +152,14 @@ public:
   std::string main;
 
   bool hasClientAddrs(bool complain = true) const;
+  eibaddr_t getClientAddrsStart() const { return client_addrs_start; }
+  int getClientAddrsLen() const { return client_addrs_len; }
+
+  /** Returns the minimum maxFrameLength across all connected bus drivers.
+   *  Skips drivers that return 0 (unknown/not a bus driver).
+   *  Returns 263 if no driver reports a value (NCN5120 default).
+   */
+  unsigned int maxFrameLength() const;
 
   /** eventual exit code. Inremebted on fatal error */
   int exitcode = 0;
