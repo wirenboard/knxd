@@ -32,5 +32,5 @@ libbackend_a_SOURCES= $(FT12) $(TPUART_COMMON) $(EIBNETIP) $(EIBNETIPTUNNEL) \
 	fqueue.cpp \
 	fpace.cpp \
 	monitor.cpp \
+	fdatasecure.cpp \
 	# end
-
