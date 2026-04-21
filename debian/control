@@ -13,6 +13,7 @@ Build-Depends: debhelper-compat (=13),
   libfmt-dev | libfmt3-dev | cmake (>= 2.8.12),
   libfmt-dev | libfmt3-dev | git,
   libinih-dev,
+  libssl-dev,
 Build-Conflicts: libsystemd-daemon-dev (<< 200)
 Standards-Version: 4.7.0.1
 Homepage: https://github.com/knxd/knxd
@@ -50,4 +51,3 @@ Description: development files for knxd
  KNX is a standard protocol for home and building control.
  .
  These are the development files for knxd clients.
-
