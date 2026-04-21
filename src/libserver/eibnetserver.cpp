@@ -156,12 +156,29 @@ EIBnetServer::setup()
   route = router_cfg->name.size() > 0;
   tunnel = tunnel_cfg->name.size() > 0;
   discover = cfg->value("discover",false);
+  secure = cfg->value("secure",false);
   single_port = !cfg->value("multi-port",false);
   multicastaddr = cfg->value("multicast-address","224.0.23.12");
   port = cfg->value("port",3671);
   interface = cfg->value("interface","");
   servername = cfg->value("name", dynamic_cast<Router *>(&router)->servername);
   keepalive = cfg->value("heartbeat-timeout", CONNECTION_ALIVE_TIME);
+  {
+    // 03_05_01 Resources v01.10.01, §4.3.7.1: range 15..254
+    // 0 = not configured, auto-detect from hardware driver in start()
+    int v = cfg->value("max-apdu-length", -1);
+    if (v > 254)
+      {
+        ERRORPRINTF (t, E_ERROR | 150, "max-apdu-length %d exceeds 254, clamping", v);
+        v = 254;
+      }
+    else if (v >= 0 && v < 15)
+      {
+        ERRORPRINTF (t, E_ERROR | 153, "max-apdu-length %d below minimum 15, clamping", v);
+        v = 15;
+      }
+    maxAPDULength = (v >= 0) ? v : 0;
+  }
 
 
   if (tunnel)
@@ -188,6 +205,14 @@ EIBnetServer::start()
 {
   struct sockaddr_in baddr;
   LinkConnectClientPtr mcast_conn;
+
+  if (maxAPDULength == 0)
+    {
+      unsigned int fl = static_cast<Router &>(router).maxFrameLength();
+      maxAPDULength = (fl > 8) ? fl - 8 : 15;
+      if (maxAPDULength > 254)
+        maxAPDULength = 254;
+    }
 
   TRACEPRINTF (t, 8, "Open");
 
@@ -335,6 +360,7 @@ rt:
       s->no = 1;
       s->type = type;
       s->nat = r1.nat;
+      s->maxAPDULength = maxAPDULength;
       if(!conn->setup())
         return -1;
       if(!static_cast<Router &>(router).registerLink(conn, true))
@@ -570,21 +596,38 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = 1;
-      d.family = 2; // core
+      // version 2 = KNXnet/IP v2 with TCP support (ISO 22510)
+      d.version = secure ? 2 : 1;
+      d.family = SF_CORE;
       r2.services.push_back (d);
-      //d.family = 3; // device management
-      //r2.services.add (d);
-      d.family = 4;
+      d.family = SF_TUNNELLING;
       if (tunnel)
         r2.services.push_back (d);
-      d.family = 5;
+      d.family = SF_ROUTING;
       if (route)
+        r2.services.push_back (d);
+      d.family = SF_SECURITY;
+      if (secure)
         r2.services.push_back (d);
       if (!GetSourceAddress (t, &r1.caddr, &r2.caddr))
         goto out;
       r2.caddr.sin_port = Port;
-      isock->Send (r2.ToPacket (), r1.caddr);
+      {
+        EIBNetIPPacket pkt = r2.ToPacket ();
+        // Append Secure Service Families DIB (type 0x06) for ETS
+        if (secure)
+          {
+            size_t off = pkt.data.size();
+            pkt.data.resize(off + 6);
+            pkt.data[off + 0] = 6;
+            pkt.data[off + 1] = 0x06; // SecureServiceFamilies
+            pkt.data[off + 2] = SF_DEVICE_MANAGEMENT;
+            pkt.data[off + 3] = 0x01;
+            pkt.data[off + 4] = SF_TUNNELLING;
+            pkt.data[off + 5] = 0x01;
+          }
+        isock->Send (pkt, r1.caddr);
+      }
       goto out;
     }
 
@@ -609,17 +652,20 @@ EIBnetServer::handle_packet (EIBNetIPPacket *p1, EIBNetIPSocket *isock)
       memcpy(r2.MAC, mac_address, sizeof(r2.MAC));
       //FIXME: Hostname, indiv. address
       strncpy ((char *) r2.name, servername.c_str(), sizeof(r2.name) - 1);
-      d.version = 1;
-      d.family = 2;
+      d.version = secure ? 2 : 1;
+      d.family = SF_CORE;
       if (discover)
         r2.services.push_back (d);
-      d.family = 3;
+      d.family = SF_DEVICE_MANAGEMENT;
       r2.services.push_back (d);
-      d.family = 4;
+      d.family = SF_TUNNELLING;
       if (tunnel)
         r2.services.push_back (d);
-      d.family = 5;
+      d.family = SF_ROUTING;
       if (route)
+        r2.services.push_back (d);
+      d.family = SF_SECURITY;
+      if (secure)
         r2.services.push_back (d);
       isock->Send (r2.ToPacket (), r1.caddr);
       goto out;
@@ -1042,6 +1088,12 @@ void ConnState::config_request(EIBnet_ConfigRequest &r1, EIBNetIPSocket *isock)
                       res[1] = 0;
                       start = 0;
                     }
+                  else if (prop == PID_MAX_APDULENGTH)
+                    {
+                      res.resize (2);
+                      res[0] = (maxAPDULength >> 8) & 0xFF;
+                      res[1] = maxAPDULength & 0xFF;
+                    }
                   else
                     count = 0;
                 }
@@ -1111,4 +1163,3 @@ void ConnState::config_response (EIBnet_ConfigACK &r1)
       send_Next();
     }
 }
-
