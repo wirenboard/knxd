@@ -1,3 +1,9 @@
+knxd (0.14.74-1+wb101) unstable; urgency=medium
+
+  * Add PID_MAX_APDULENGTH support for DEVICE_CONFIGURATION_REQUEST
+
+ -- boger <boger@wirenboard.com>  Sat, 21 Mar 2026 22:30:00 +0300
+
 knxd (0.14.74-1+wb100) unstable; urgency=medium
 
   * Add restart wb-knxd-config after install
