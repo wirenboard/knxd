@@ -68,6 +68,8 @@ public:
   uint8_t sno = 0;
   // Receiving sequence counter
   uint8_t rno = 0;
+  // TUNNEL_FEATURE_INFO enable (feature 0x08)
+  bool featureInfoEnabled = false;
 };
 
 class TunService
@@ -136,7 +138,7 @@ public:
 class TunServiceConfig : public TunService
 {
 public:
-  TunServiceConfig(const std::shared_ptr<TunChannel>& channel);
+  TunServiceConfig(const std::shared_ptr<TunChannel>& channel, uint16_t maxAPDULength = 249);
   virtual ~TunServiceConfig();
 
   bool setupService() override;
@@ -144,6 +146,8 @@ public:
   void stop(bool err) override;
 
   ErrorCode handleConfigRequest(EIBnet_ConfigRequest &r1) override;
+
+  uint16_t maxAPDULength;
 };
 
 #endif
