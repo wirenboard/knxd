@@ -138,7 +138,7 @@ public:
 class TunServiceConfig : public TunService
 {
 public:
-  TunServiceConfig(const std::shared_ptr<TunChannel>& channel, uint16_t maxAPDULength = 0);
+  TunServiceConfig(const std::shared_ptr<TunChannel>& channel, uint16_t maxAPDULength = 249);
   virtual ~TunServiceConfig();
 
   bool setupService() override;
