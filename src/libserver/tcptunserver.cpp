@@ -782,8 +782,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET ch=%d feat=%d", chanID, featureID);
 
       // Build TUNNEL_FEATURE_RESPONSE (§5.4.9)
-      // resp.data layout: connHdr[0..3] + featureID[4] + returnCode[5] + value[6..]
-      // CArray::resize() zero-initializes new elements
       EIBNetIPPacket resp;
       resp.service = TUNNEL_FEATURE_RESPONSE;
       // Connection header: len(4), channel, seqno, reserved
@@ -794,7 +792,6 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
           resp.data.resize(8);
           resp.data[4] = featureID;
           resp.data[5] = FR_NO_ERROR;
-          resp.data[6] = 0x00;
           resp.data[7] = 0x04; // cEMI only
           break;
         case IF_DEVICE_DESCRIPTOR_TYPE0: // mask version 0701h
