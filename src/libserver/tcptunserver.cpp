@@ -782,10 +782,10 @@ TcpTunConn::handlePacket(const EIBNetIPPacket &p1)
       TRACEPRINTF (t, 8, "TUNNEL_FEATURE_GET ch=%d feat=%d", chanID, featureID);
 
       // Build TUNNEL_FEATURE_RESPONSE (§5.4.9)
+      // resp.data layout: connHdr[0..3] + featureID[4] + returnCode[5] + value[6..]
+      // CArray::resize() zero-initializes new elements
       EIBNetIPPacket resp;
       resp.service = TUNNEL_FEATURE_RESPONSE;
-      // Connection header: len(4), channel, seqno, reserved
-      // Then: featureID, returnCode, featureValue...
       switch (featureID)
         {
         case IF_SUPPORTED_EMI_TYPE: // 2 bytes, bitfield (bit0=EMI1, bit1=EMI2, bit2=cEMI)
