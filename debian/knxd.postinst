@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+	configure)
+		# wb-knxd-config restart
+		deb-systemd-invoke try-restart wb-knxd-config.service >/dev/null || true
+		;;
+esac
+
+#DEBHELPER#
