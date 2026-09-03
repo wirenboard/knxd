@@ -1,3 +1,9 @@
+knxd (0.14.75-1+wb100) unstable; urgency=medium
+
+  * Restart wb-knxd-config after upgrade
+
+ -- Ilya Titov <ilya.titov@wirenboard.com>  Thu, 03 Sep 2026 09:35:41 +0300
+
 knxd (0.14.75-1) unstable; urgency=medium
 
   * Merge
