@@ -3,7 +3,7 @@ Description=KNX Daemon (socket)
 
 [Socket]
 ListenStream=@RUNDIR@/knx
-ListenStream=6720
+ListenStream=127.0.0.1:6720
 
 [Install]
 WantedBy=sockets.target
